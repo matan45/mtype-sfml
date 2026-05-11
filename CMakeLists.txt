@@ -5,7 +5,7 @@
 # include/PluginHostApi.h (vendored — keep in sync with mType if
 # MTYPE_PLUGIN_ABI_VERSION bumps) and vendor/SFML (3.x submodule).
 
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.16)
 project(mtype_sfml CXX)
 
 set(CMAKE_CXX_STANDARD 17)
