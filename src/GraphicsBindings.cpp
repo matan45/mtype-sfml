@@ -21,9 +21,13 @@
 #include <SFML/Graphics/View.hpp>
 #include <SFML/Graphics/PrimitiveType.hpp>
 #include <SFML/Graphics/RenderStates.hpp>
+#include <SFML/Graphics/RenderTexture.hpp>
+#include <SFML/Graphics/Shader.hpp>
+#include <SFML/Graphics/Glsl.hpp>
 #include <SFML/System/Angle.hpp>
 
 #include <string>
+#include <unordered_set>
 
 namespace mtypesfml
 {
@@ -50,6 +54,13 @@ namespace mtypesfml
                 static_cast<std::uint8_t>(g_host->getInt(args[off + 3])));
         }
 
+        /* Texture handles that point at a sf::Texture owned by some other
+         * SFML object (currently: sf::RenderTexture::getTexture). Marked
+         * here so nTextureDestroy doesn't `delete` a foreign pointer.
+         * Lifetime warning: the user must destroy any borrowed Texture
+         * before destroying the RenderTexture it came from. */
+        std::unordered_set<std::int64_t> g_borrowedTextureIds;
+
         /* ---- Texture ---- */
 
         MTypeValue* nTextureLoadFromFile(void*, MTypeContext* ctx,
@@ -75,7 +86,14 @@ namespace mtypesfml
             if (!requireArgs(ctx, argc, 1, "__native__sfml_texture_destroy")) {
                 return g_host->makeVoid(ctx);
             }
-            delete g_textures.erase(g_host->getInt(args[0]));
+            std::int64_t id = g_host->getInt(args[0]);
+            sf::Texture* tex = g_textures.erase(id);
+            /* If this handle points at a texture owned elsewhere (e.g.
+             * borrowed from a RenderTexture), drop it from the registry
+             * but don't free the pointer. */
+            if (g_borrowedTextureIds.erase(id) == 0) {
+                delete tex;
+            }
             return g_host->makeVoid(ctx);
         }
         MTypeValue* nTextureSize(void*, MTypeContext* ctx,
@@ -702,6 +720,380 @@ namespace mtypesfml
             if (w) w->setView(w->getDefaultView());
             return g_host->makeVoid(ctx);
         }
+
+        /* ----------------------------------------------------------------
+         * Phase 3 — RenderTexture (offscreen target).
+         *
+         * Same surface as RenderWindow's draw side: clear, draw_*,
+         * display, set_view, reset_view. Plus get_texture which returns
+         * a *borrowed* Texture handle pointing into the RT's internal
+         * framebuffer texture.
+         * ---------------------------------------------------------------- */
+
+        MTypeValue* nRenderTextureCreate(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            unsigned w = static_cast<unsigned>(g_host->getInt(args[0]));
+            unsigned h = static_cast<unsigned>(g_host->getInt(args[1]));
+            sf::RenderTexture* rt = nullptr;
+            try {
+                rt = new sf::RenderTexture({w, h});
+            } catch (const std::exception& e) {
+                std::string m = std::string("__native__sfml_render_texture_create: ") + e.what();
+                g_host->raiseError(ctx, kEx, m.c_str());
+                return g_host->makeInt(ctx, 0);
+            }
+            return g_host->makeInt(ctx, g_renderTextures.insert(rt));
+        }
+        MTypeValue* nRenderTextureDestroy(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_render_texture_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_renderTextures.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureResize(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_render_texture_resize")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            if (!rt) return g_host->makeBool(ctx, 0);
+            unsigned w = static_cast<unsigned>(g_host->getInt(args[1]));
+            unsigned h = static_cast<unsigned>(g_host->getInt(args[2]));
+            return g_host->makeBool(ctx, rt->resize({w, h}) ? 1 : 0);
+        }
+        MTypeValue* nRenderTextureSize(void*, MTypeContext* ctx,
+                                         const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_render_texture_size")) {
+                return g_host->makeNull(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            unsigned w = 0, h = 0;
+            if (rt) { auto s = rt->getSize(); w = s.x; h = s.y; }
+            MTypeValue* out = g_host->makeArray(ctx, MT_TAG_INT, 2);
+            g_host->arraySet(out, 0, g_host->makeInt(ctx, w));
+            g_host->arraySet(out, 1, g_host->makeInt(ctx, h));
+            return out;
+        }
+        MTypeValue* nRenderTextureClear(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_render_texture_clear")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            if (!rt) return g_host->makeVoid(ctx);
+            rt->clear(colorFromArgs(ctx, args, 1));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDisplay(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_render_texture_display")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            if (rt) rt->display();
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureSetView(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_set_view")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::View* v           = g_views.find(g_host->getInt(args[1]));
+            if (rt && v) rt->setView(*v);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureResetView(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_render_texture_reset_view")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            if (rt) rt->setView(rt->getDefaultView());
+            return g_host->makeVoid(ctx);
+        }
+
+        /* Get a borrowed Texture handle backed by the RT's framebuffer.
+         * The handle is registered in g_textures but flagged as borrowed
+         * — Texture.destroy() will release the handle without freeing
+         * the underlying pointer. Don't destroy the RT before destroying
+         * any borrowed textures from it. */
+        MTypeValue* nRenderTextureGetTexture(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_render_texture_get_texture")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            if (!rt) return g_host->makeInt(ctx, 0);
+            sf::Texture* tex = const_cast<sf::Texture*>(&rt->getTexture());
+            std::int64_t id = g_textures.insert(tex);
+            g_borrowedTextureIds.insert(id);
+            return g_host->makeInt(ctx, id);
+        }
+
+        /* RenderTexture draw natives — same drawables as RenderWindow.
+         * Implementation is a one-line per drawable. */
+        MTypeValue* nRenderTextureDrawSprite(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_sprite")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::Sprite* s = g_sprites.find(g_host->getInt(args[1]));
+            if (rt && s) rt->draw(*s);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDrawRect(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_rect")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::RectangleShape* r = g_rectShapes.find(g_host->getInt(args[1]));
+            if (rt && r) rt->draw(*r);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDrawCircle(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_circle")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::CircleShape* c = g_circleShapes.find(g_host->getInt(args[1]));
+            if (rt && c) rt->draw(*c);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDrawText(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_text")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::Text* t = g_texts.find(g_host->getInt(args[1]));
+            if (rt && t) rt->draw(*t);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDrawVertexArray(void*, MTypeContext* ctx,
+                                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_vertex_array")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[1]));
+            if (rt && va) rt->draw(*va);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ----------------------------------------------------------------
+         * Phase 4 — Shader.
+         *
+         * GLSL fragment / vertex programs. Loaded from disk (loadFromFile)
+         * or from a mType string (loadFragmentFromMemory). Uniforms set
+         * by name with typed setters. Pass via shader-aware draw natives
+         * to apply during rendering.
+         * ---------------------------------------------------------------- */
+
+        MTypeValue* nShaderCreate(void*, MTypeContext* ctx,
+                                    const MTypeValue* const*, int argc)
+        {
+            if (!requireArgs(ctx, argc, 0, "__native__sfml_shader_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            auto* sh = new sf::Shader();
+            return g_host->makeInt(ctx, g_shaders.insert(sh));
+        }
+        MTypeValue* nShaderDestroy(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_shader_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_shaders.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        /* type: 0=Vertex, 1=Fragment, 2=Geometry — matches sf::Shader::Type. */
+        MTypeValue* nShaderLoadFromFile(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_load_from_file")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeBool(ctx, 0);
+            const char* path = getStr(args[1]);
+            int type = static_cast<int>(g_host->getInt(args[2]));
+            return g_host->makeBool(ctx,
+                sh->loadFromFile(path, static_cast<sf::Shader::Type>(type)) ? 1 : 0);
+        }
+        MTypeValue* nShaderLoadVertFragFromFile(void*, MTypeContext* ctx,
+                                                   const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_load_vert_frag_from_file")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeBool(ctx, 0);
+            const char* vp = getStr(args[1]);
+            const char* fp = getStr(args[2]);
+            return g_host->makeBool(ctx, sh->loadFromFile(vp, fp) ? 1 : 0);
+        }
+        /* Load a fragment shader from an in-memory GLSL source string. */
+        MTypeValue* nShaderLoadFragFromMemory(void*, MTypeContext* ctx,
+                                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_shader_load_frag_from_memory")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeBool(ctx, 0);
+            return g_host->makeBool(ctx,
+                sh->loadFromMemory(getStr(args[1]), sf::Shader::Type::Fragment) ? 1 : 0);
+        }
+        MTypeValue* nShaderSetUniformFloat(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_float")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), static_cast<float>(g_host->getFloat(args[2])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformVec2(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 4, "__native__sfml_shader_set_uniform_vec2")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Vec2(
+                static_cast<float>(g_host->getFloat(args[2])),
+                static_cast<float>(g_host->getFloat(args[3]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformVec3(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_shader_set_uniform_vec3")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Vec3(
+                static_cast<float>(g_host->getFloat(args[2])),
+                static_cast<float>(g_host->getFloat(args[3])),
+                static_cast<float>(g_host->getFloat(args[4]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformVec4(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 6, "__native__sfml_shader_set_uniform_vec4")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Vec4(
+                static_cast<float>(g_host->getFloat(args[2])),
+                static_cast<float>(g_host->getFloat(args[3])),
+                static_cast<float>(g_host->getFloat(args[4])),
+                static_cast<float>(g_host->getFloat(args[5]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformInt(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_int")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), static_cast<int>(g_host->getInt(args[2])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformTexture(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_texture")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            sf::Texture* tex = g_textures.find(g_host->getInt(args[2]));
+            if (!sh || !tex) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), *tex);
+            return g_host->makeVoid(ctx);
+        }
+        /* CurrentTexture sentinel — binds the drawable's own texture
+         * unit as the named sampler. Most common uniform shape for
+         * post-processing shaders. */
+        MTypeValue* nShaderSetUniformCurrentTexture(void*, MTypeContext* ctx,
+                                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_shader_set_uniform_current_texture")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Shader::CurrentTexture);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* Shader-aware draws. Pass nullptr shader to draw without one. */
+        MTypeValue* nWindowDrawSpriteShader(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_window_draw_sprite_shader")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::Sprite* s = g_sprites.find(g_host->getInt(args[1]));
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[2]));
+            if (w && s) {
+                sf::RenderStates states;
+                states.shader = sh;
+                w->draw(*s, states);
+            }
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowDrawVertexArrayShader(void*, MTypeContext* ctx,
+                                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 4, "__native__sfml_window_draw_vertex_array_shader")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[1]));
+            sf::Texture* tex    = g_textures.find(g_host->getInt(args[2]));
+            sf::Shader* sh      = g_shaders.find(g_host->getInt(args[3]));
+            if (w && va) {
+                sf::RenderStates states;
+                states.texture = tex;
+                states.shader  = sh;
+                w->draw(*va, states);
+            }
+            return g_host->makeVoid(ctx);
+        }
     }
 
     void registerGraphicsNatives(MTypeContext* ctx)
@@ -778,5 +1170,37 @@ namespace mtypesfml
         reg("__native__sfml_view_rotate",        &nViewRotate);
         reg("__native__sfml_window_set_view",    &nWindowSetView);
         reg("__native__sfml_window_reset_view",  &nWindowResetView);
+
+        /* RenderTexture */
+        reg("__native__sfml_render_texture_create",                &nRenderTextureCreate);
+        reg("__native__sfml_render_texture_destroy",               &nRenderTextureDestroy);
+        reg("__native__sfml_render_texture_resize",                &nRenderTextureResize);
+        reg("__native__sfml_render_texture_size",                  &nRenderTextureSize);
+        reg("__native__sfml_render_texture_clear",                 &nRenderTextureClear);
+        reg("__native__sfml_render_texture_display",               &nRenderTextureDisplay);
+        reg("__native__sfml_render_texture_set_view",              &nRenderTextureSetView);
+        reg("__native__sfml_render_texture_reset_view",            &nRenderTextureResetView);
+        reg("__native__sfml_render_texture_get_texture",           &nRenderTextureGetTexture);
+        reg("__native__sfml_render_texture_draw_sprite",           &nRenderTextureDrawSprite);
+        reg("__native__sfml_render_texture_draw_rect",             &nRenderTextureDrawRect);
+        reg("__native__sfml_render_texture_draw_circle",           &nRenderTextureDrawCircle);
+        reg("__native__sfml_render_texture_draw_text",             &nRenderTextureDrawText);
+        reg("__native__sfml_render_texture_draw_vertex_array",     &nRenderTextureDrawVertexArray);
+
+        /* Shader */
+        reg("__native__sfml_shader_create",                       &nShaderCreate);
+        reg("__native__sfml_shader_destroy",                      &nShaderDestroy);
+        reg("__native__sfml_shader_load_from_file",               &nShaderLoadFromFile);
+        reg("__native__sfml_shader_load_vert_frag_from_file",     &nShaderLoadVertFragFromFile);
+        reg("__native__sfml_shader_load_frag_from_memory",        &nShaderLoadFragFromMemory);
+        reg("__native__sfml_shader_set_uniform_float",            &nShaderSetUniformFloat);
+        reg("__native__sfml_shader_set_uniform_vec2",             &nShaderSetUniformVec2);
+        reg("__native__sfml_shader_set_uniform_vec3",             &nShaderSetUniformVec3);
+        reg("__native__sfml_shader_set_uniform_vec4",             &nShaderSetUniformVec4);
+        reg("__native__sfml_shader_set_uniform_int",              &nShaderSetUniformInt);
+        reg("__native__sfml_shader_set_uniform_texture",          &nShaderSetUniformTexture);
+        reg("__native__sfml_shader_set_uniform_current_texture",  &nShaderSetUniformCurrentTexture);
+        reg("__native__sfml_window_draw_sprite_shader",           &nWindowDrawSpriteShader);
+        reg("__native__sfml_window_draw_vertex_array_shader",     &nWindowDrawVertexArrayShader);
     }
 }

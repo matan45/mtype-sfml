@@ -15,6 +15,8 @@ namespace mtypesfml
     HandleRegistry<sf::CircleShape>    g_circleShapes;
     HandleRegistry<sf::VertexArray>    g_vertexArrays;
     HandleRegistry<sf::View>           g_views;
+    HandleRegistry<sf::RenderTexture>  g_renderTextures;
+    HandleRegistry<sf::Shader>         g_shaders;
 }
 
 extern "C" MTYPE_PLUGIN_EXPORT

@@ -39,3 +39,4 @@ exits.
 | `lib/Graphics.mt` | Wrappers for `Texture`, `Sprite`, `RectangleShape`, `CircleShape`, `Font`, `Text`, and a flat `Draw::sprite/rect/circle/text(window, …)` helper. |
 | `demo/demo.mt`    | The demo above — event loop, realtime WASD movement, shape drawing. |
 | `demo/demo_vertex_view.mt` | Phase 2 — custom rendering. A 64-segment rainbow triangle-strip ribbon built once with `VertexArray`, viewed through a `View` (camera) that pans (WASD), zooms (Q/E), and rotates (R). Shows the world-space-then-HUD pattern (`Camera::setView` ↔ `Camera::resetView`). |
+| `demo/demo_post_fx.mt`     | Phase 3 + 4 — offscreen rendering + GLSL post-processing. Renders the rainbow ribbon into a `RenderTexture`, then composites that to the window through an inline fragment shader (wavy distortion + scanlines, driven by a `time` uniform). Space toggles the shader, Up/Down adjust the wave amplitude. |

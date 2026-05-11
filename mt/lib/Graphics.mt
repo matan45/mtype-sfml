@@ -258,3 +258,140 @@ class Camera {
         __native__sfml_window_reset_view(w.handle);
     }
 }
+
+// ----------------------------------------------------------------------
+// Phase 3 — RenderTexture (offscreen draw target).
+//
+// Mirror RenderWindow's draw surface, but renders into an off-screen
+// texture you can sample later (post-processing, framebuffer effects,
+// minimaps). Lifetime: any borrowed Texture from getTexture() must be
+// destroyed before its source RenderTexture.
+// ----------------------------------------------------------------------
+
+class RenderTexture {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_render_texture_destroy(this.handle); }
+
+    public function size(): int[] { return __native__sfml_render_texture_size(this.handle); }
+    public function resize(int w, int h): bool {
+        return __native__sfml_render_texture_resize(this.handle, w, h);
+    }
+
+    public function clear(int r, int g, int b, int a): void {
+        __native__sfml_render_texture_clear(this.handle, r, g, b, a);
+    }
+    // Must be called after drawing into the RT, before sampling its
+    // texture or drawing into it again.
+    public function display(): void { __native__sfml_render_texture_display(this.handle); }
+
+    public function setView(View v): void {
+        __native__sfml_render_texture_set_view(this.handle, v.handle);
+    }
+    public function resetView(): void { __native__sfml_render_texture_reset_view(this.handle); }
+
+    // Borrowed Texture handle into the RT's framebuffer. The returned
+    // Texture's .destroy() releases the handle without freeing the
+    // underlying pixels (those belong to the RenderTexture).
+    public function getTexture(): Texture {
+        return new Texture(__native__sfml_render_texture_get_texture(this.handle));
+    }
+}
+
+class RenderTextures {
+    public static function create(int width, int height): RenderTexture {
+        return new RenderTexture(__native__sfml_render_texture_create(width, height));
+    }
+}
+
+// Drawing INTO a RenderTexture. Mirrors Draw::* but with an RT target.
+class DrawTo {
+    public static function sprite(RenderTexture rt, Sprite s): void {
+        __native__sfml_render_texture_draw_sprite(rt.handle, s.handle);
+    }
+    public static function rect(RenderTexture rt, RectangleShape r): void {
+        __native__sfml_render_texture_draw_rect(rt.handle, r.handle);
+    }
+    public static function circle(RenderTexture rt, CircleShape c): void {
+        __native__sfml_render_texture_draw_circle(rt.handle, c.handle);
+    }
+    public static function text(RenderTexture rt, Text t): void {
+        __native__sfml_render_texture_draw_text(rt.handle, t.handle);
+    }
+    public static function vertexArray(RenderTexture rt, VertexArray va): void {
+        __native__sfml_render_texture_draw_vertex_array(rt.handle, va.handle);
+    }
+}
+
+// ----------------------------------------------------------------------
+// Phase 4 — Shader (GLSL programs).
+//
+// Load a fragment / vertex GLSL shader, set uniforms, then draw with
+// the shader bound. Use Shader::CurrentTexture sentinel for the
+// drawable's own texture (the common case for post-processing).
+// ----------------------------------------------------------------------
+
+// sf::Shader::Type values.
+class ShaderType {
+    public static function vertex():   int { return 0; }
+    public static function fragment(): int { return 1; }
+    public static function geometry(): int { return 2; }
+}
+
+class Shader {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_shader_destroy(this.handle); }
+
+    public function loadFromFile(string path, int type): bool {
+        return __native__sfml_shader_load_from_file(this.handle, path, type);
+    }
+    public function loadVertFragFromFile(string vertPath, string fragPath): bool {
+        return __native__sfml_shader_load_vert_frag_from_file(this.handle, vertPath, fragPath);
+    }
+    public function loadFragFromMemory(string source): bool {
+        return __native__sfml_shader_load_frag_from_memory(this.handle, source);
+    }
+
+    public function setFloat(string name, float value): void {
+        __native__sfml_shader_set_uniform_float(this.handle, name, value);
+    }
+    public function setVec2(string name, float x, float y): void {
+        __native__sfml_shader_set_uniform_vec2(this.handle, name, x, y);
+    }
+    public function setVec3(string name, float x, float y, float z): void {
+        __native__sfml_shader_set_uniform_vec3(this.handle, name, x, y, z);
+    }
+    public function setVec4(string name, float x, float y, float z, float w): void {
+        __native__sfml_shader_set_uniform_vec4(this.handle, name, x, y, z, w);
+    }
+    public function setInt(string name, int value): void {
+        __native__sfml_shader_set_uniform_int(this.handle, name, value);
+    }
+    public function setTexture(string name, Texture tex): void {
+        __native__sfml_shader_set_uniform_texture(this.handle, name, tex.handle);
+    }
+    // Bind the drawable's own texture for `name`. The standard pattern
+    // for post-processing fragment shaders.
+    public function setCurrentTexture(string name): void {
+        __native__sfml_shader_set_uniform_current_texture(this.handle, name);
+    }
+}
+
+class Shaders {
+    public static function create(): Shader {
+        return new Shader(__native__sfml_shader_create());
+    }
+}
+
+// Shader-aware draws. The shader is applied to the sprite/VA's pixels.
+class DrawShader {
+    public static function sprite(RenderWindow w, Sprite s, Shader sh): void {
+        __native__sfml_window_draw_sprite_shader(w.handle, s.handle, sh.handle);
+    }
+    public static function vertexArray(RenderWindow w, VertexArray va,
+                                          Texture tex, Shader sh): void {
+        __native__sfml_window_draw_vertex_array_shader(w.handle, va.handle,
+                                                        tex.handle, sh.handle);
+    }
+}

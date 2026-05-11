@@ -22,6 +22,8 @@ namespace sf
     class CircleShape;
     class VertexArray;
     class View;
+    class RenderTexture;
+    class Shader;
 }
 
 namespace mtypesfml
@@ -37,6 +39,8 @@ namespace mtypesfml
     extern HandleRegistry<sf::CircleShape>    g_circleShapes;
     extern HandleRegistry<sf::VertexArray>    g_vertexArrays;
     extern HandleRegistry<sf::View>           g_views;
+    extern HandleRegistry<sf::RenderTexture>  g_renderTextures;
+    extern HandleRegistry<sf::Shader>         g_shaders;
 
     void registerWindowNatives(MTypeContext* ctx);
     void registerGraphicsNatives(MTypeContext* ctx);
