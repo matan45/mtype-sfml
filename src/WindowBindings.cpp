@@ -14,7 +14,9 @@
 #include "BindingHelpers.hpp"
 
 #include <SFML/Graphics/RenderWindow.hpp>
+#include <SFML/Window/Cursor.hpp>
 #include <SFML/Window/Event.hpp>
+#include <SFML/Window/Joystick.hpp>
 #include <SFML/Window/Keyboard.hpp>
 #include <SFML/Window/Mouse.hpp>
 #include <SFML/Window/VideoMode.hpp>
@@ -304,6 +306,233 @@ namespace mtypesfml
             return g_host->makeBool(ctx,
                 sf::Mouse::isButtonPressed(static_cast<sf::Mouse::Button>(btn)) ? 1 : 0);
         }
+
+        /* ---- Window controls (title / size / vsync / cursor / focus) ---- */
+
+        MTypeValue* nWindowSetTitle(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_title")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (!w) return g_host->makeVoid(ctx);
+            std::size_t len = 0;
+            const char* utf8 = getStr(args[1], &len);
+            w->setTitle(sf::String::fromUtf8(utf8, utf8 + len));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetPosition(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_window_set_position")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setPosition({static_cast<int>(g_host->getInt(args[1])),
+                                    static_cast<int>(g_host->getInt(args[2]))});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetSize(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_window_set_size")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setSize({detail::getU(args[1]), detail::getU(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetVsync(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_vsync")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setVerticalSyncEnabled(detail::getB(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetFramerateLimit(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_framerate_limit")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setFramerateLimit(detail::getU(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetKeyRepeat(void*, MTypeContext* ctx,
+                                           const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_key_repeat")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setKeyRepeatEnabled(detail::getB(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetMouseCursorVisible(void*, MTypeContext* ctx,
+                                                    const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_mouse_cursor_visible")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setMouseCursorVisible(detail::getB(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetMouseCursorGrabbed(void*, MTypeContext* ctx,
+                                                    const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_mouse_cursor_grabbed")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setMouseCursorGrabbed(detail::getB(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowHasFocus(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_window_has_focus")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            return g_host->makeBool(ctx, (w && w->hasFocus()) ? 1 : 0);
+        }
+        MTypeValue* nWindowRequestFocus(void*, MTypeContext* ctx,
+                                           const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_window_request_focus")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->requestFocus();
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetMousePosition(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_window_set_mouse_position")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) sf::Mouse::setPosition({static_cast<int>(g_host->getInt(args[1])),
+                                            static_cast<int>(g_host->getInt(args[2]))}, *w);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nMousePositionWindow(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_mouse_position_window")) {
+                return detail::makeIntPair(ctx, 0, 0);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (!w) return detail::makeIntPair(ctx, 0, 0);
+            auto p = sf::Mouse::getPosition(*w);
+            return detail::makeIntPair(ctx, p.x, p.y);
+        }
+
+        /* ---- Cursor (system-defined cursor shapes) ---- */
+
+        MTypeValue* nCursorCreateFromSystem(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_cursor_create_from_system")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            auto type = static_cast<sf::Cursor::Type>(g_host->getInt(args[0]));
+            auto opt = sf::Cursor::createFromSystem(type);
+            if (!opt) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_cursor_create_from_system: unsupported cursor type on this platform");
+                return g_host->makeInt(ctx, 0);
+            }
+            auto* c = new sf::Cursor(std::move(*opt));
+            return g_host->makeInt(ctx, g_cursors.insert(c));
+        }
+        MTypeValue* nCursorDestroy(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_cursor_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_cursors.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetMouseCursor(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_mouse_cursor")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::Cursor* c = g_cursors.find(g_host->getInt(args[1]));
+            if (w && c) w->setMouseCursor(*c);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ---- Joystick (no handle, all static) ---- */
+
+        MTypeValue* nJoystickUpdate(void*, MTypeContext* ctx,
+                                       const MTypeValue* const*, int argc)
+        {
+            if (!requireArgs(ctx, argc, 0, "__native__sfml_joystick_update")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Joystick::update();
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nJoystickIsConnected(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_joystick_is_connected")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            return g_host->makeBool(ctx,
+                sf::Joystick::isConnected(detail::getU(args[0])) ? 1 : 0);
+        }
+        MTypeValue* nJoystickButtonCount(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_joystick_button_count")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            return g_host->makeInt(ctx,
+                static_cast<std::int64_t>(sf::Joystick::getButtonCount(detail::getU(args[0]))));
+        }
+        MTypeValue* nJoystickAxisIsAvailable(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_joystick_axis_is_available")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            return g_host->makeBool(ctx,
+                sf::Joystick::hasAxis(detail::getU(args[0]),
+                                       static_cast<sf::Joystick::Axis>(g_host->getInt(args[1]))) ? 1 : 0);
+        }
+        MTypeValue* nJoystickIsButtonPressed(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_joystick_is_button_pressed")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            return g_host->makeBool(ctx,
+                sf::Joystick::isButtonPressed(detail::getU(args[0]),
+                                                detail::getU(args[1])) ? 1 : 0);
+        }
+        MTypeValue* nJoystickAxisPosition(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_joystick_axis_position")) {
+                return g_host->makeFloat(ctx, 0.0);
+            }
+            return g_host->makeFloat(ctx,
+                sf::Joystick::getAxisPosition(detail::getU(args[0]),
+                                                static_cast<sf::Joystick::Axis>(g_host->getInt(args[1]))));
+        }
     }
 
     /* Bridge for ImGui: forward the most-recently-polled SFML event to
@@ -356,5 +585,32 @@ namespace mtypesfml
 
         reg("__native__sfml_key_is_down",          &nKeyIsDown);
         reg("__native__sfml_mouse_button_is_down", &nMouseButtonIsDown);
+
+        /* Window controls (Phase 3 — settings, focus, mouse helpers). */
+        reg("__native__sfml_window_set_title",                 &nWindowSetTitle);
+        reg("__native__sfml_window_set_position",              &nWindowSetPosition);
+        reg("__native__sfml_window_set_size",                  &nWindowSetSize);
+        reg("__native__sfml_window_set_vsync",                 &nWindowSetVsync);
+        reg("__native__sfml_window_set_framerate_limit",       &nWindowSetFramerateLimit);
+        reg("__native__sfml_window_set_key_repeat",            &nWindowSetKeyRepeat);
+        reg("__native__sfml_window_set_mouse_cursor_visible",  &nWindowSetMouseCursorVisible);
+        reg("__native__sfml_window_set_mouse_cursor_grabbed",  &nWindowSetMouseCursorGrabbed);
+        reg("__native__sfml_window_has_focus",                 &nWindowHasFocus);
+        reg("__native__sfml_window_request_focus",             &nWindowRequestFocus);
+        reg("__native__sfml_window_set_mouse_position",        &nWindowSetMousePosition);
+        reg("__native__sfml_mouse_position_window",            &nMousePositionWindow);
+
+        /* Cursor handles. */
+        reg("__native__sfml_cursor_create_from_system",        &nCursorCreateFromSystem);
+        reg("__native__sfml_cursor_destroy",                   &nCursorDestroy);
+        reg("__native__sfml_window_set_mouse_cursor",          &nWindowSetMouseCursor);
+
+        /* Joystick (no handle). */
+        reg("__native__sfml_joystick_update",                  &nJoystickUpdate);
+        reg("__native__sfml_joystick_is_connected",            &nJoystickIsConnected);
+        reg("__native__sfml_joystick_button_count",            &nJoystickButtonCount);
+        reg("__native__sfml_joystick_axis_is_available",       &nJoystickAxisIsAvailable);
+        reg("__native__sfml_joystick_is_button_pressed",       &nJoystickIsButtonPressed);
+        reg("__native__sfml_joystick_axis_position",           &nJoystickAxisPosition);
     }
 }

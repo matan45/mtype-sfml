@@ -18,9 +18,11 @@ endif()
 
 # ---- vendor: SFML 3 --------------------------------------------------------
 # Build SFML as shared libs alongside the plugin so the plugin DLL stays
-# small. Skip the heavy modules (audio + network) we don't bind yet.
+# small. Audio is enabled (SoundBuffer/Sound/Music/Listener bindings live
+# in src/AudioBindings.cpp). Network is still disabled — no bindings for
+# it yet.
 set(BUILD_SHARED_LIBS    ON  CACHE BOOL "" FORCE)
-set(SFML_BUILD_AUDIO     OFF CACHE BOOL "" FORCE)
+set(SFML_BUILD_AUDIO     ON  CACHE BOOL "" FORCE)
 set(SFML_BUILD_NETWORK   OFF CACHE BOOL "" FORCE)
 set(SFML_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 set(SFML_BUILD_TEST_SUITE OFF CACHE BOOL "" FORCE)
@@ -45,8 +47,10 @@ set(IMGUI_SOURCES
 # ---- the plugin shared lib -------------------------------------------------
 set(PLUGIN_SOURCES
     src/PluginEntry.cpp
+    src/SystemBindings.cpp
     src/WindowBindings.cpp
     src/GraphicsBindings.cpp
+    src/AudioBindings.cpp
     src/ImGuiBindings.cpp
     src/PluginGlobals.hpp
     src/HandleRegistry.hpp
@@ -74,6 +78,7 @@ target_link_libraries(mtype_sfml PRIVATE
     SFML::Graphics
     SFML::Window
     SFML::System
+    SFML::Audio
     OpenGL::GL
 )
 
@@ -92,15 +97,15 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-# Windows: copy the SFML DLLs (and any transitive runtime deps SFML
-# uses, e.g. FreeType, OpenAL — but we disabled audio so only the
-# Window/Graphics/System SFML DLLs ship) alongside the plugin output.
+# Windows: copy the SFML DLLs alongside the plugin output. SFML 3's audio
+# module statically links miniaudio, so no separate OpenAL DLL is needed.
 if(WIN32)
     add_custom_command(TARGET mtype_sfml POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:sfml-graphics>
             $<TARGET_FILE:sfml-window>
             $<TARGET_FILE:sfml-system>
+            $<TARGET_FILE:sfml-audio>
             $<TARGET_FILE_DIR:mtype_sfml>
         COMMENT "Copying SFML DLLs alongside mtype_sfml.dll"
     )

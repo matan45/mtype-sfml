@@ -6,6 +6,7 @@
 
 import * from "../lib/Sfml.mt";
 import * from "../lib/Graphics.mt";
+import * from "../lib/System.mt";
 
 __plugin_load("mt/mtype_sfml.dll");
 
@@ -32,9 +33,9 @@ int keyA   = Key::a();
 int keyS   = Key::s();
 int keyD   = Key::d();
 
-float speed = 10.0;     // px/sec
-float t = 0.0;           // accumulator for orb orbit
-float dtMs = 16.0;       // simple fixed-ish timestep; SFML's Clock could replace this
+float speed = 200.0;     // px/sec
+float t = 0.0;            // accumulator for orb orbit
+Clock frame = Clocks::create();
 
 while (window.isOpen()) {
     int ev = window.pollEvent();
@@ -49,7 +50,7 @@ while (window.isOpen()) {
         ev = window.pollEvent();
     }
 
-    float dt = dtMs / 1000.0;
+    float dt = frame.restartSeconds();
     if (Keyboard::isKeyPressed(keyW)) { py = py - speed * dt; }
     if (Keyboard::isKeyPressed(keyS)) { py = py + speed * dt; }
     if (Keyboard::isKeyPressed(keyA)) { px = px - speed * dt; }
@@ -68,6 +69,7 @@ while (window.isOpen()) {
     window.display();
 }
 
+frame.destroy();
 orb.destroy();
 player.destroy();
 window.destroy();

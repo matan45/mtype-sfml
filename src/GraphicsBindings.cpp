@@ -17,6 +17,8 @@
 #include <SFML/Graphics/Text.hpp>
 #include <SFML/Graphics/RectangleShape.hpp>
 #include <SFML/Graphics/CircleShape.hpp>
+#include <SFML/Graphics/ConvexShape.hpp>
+#include <SFML/Graphics/Image.hpp>
 #include <SFML/Graphics/VertexArray.hpp>
 #include <SFML/Graphics/View.hpp>
 #include <SFML/Graphics/PrimitiveType.hpp>
@@ -25,6 +27,8 @@
 #include <SFML/Graphics/Shader.hpp>
 #include <SFML/Graphics/Glsl.hpp>
 #include <SFML/System/Angle.hpp>
+
+#include <vector>
 
 #include <string>
 #include <unordered_set>
@@ -1094,6 +1098,628 @@ namespace mtypesfml
             }
             return g_host->makeVoid(ctx);
         }
+
+        /* ====================================================================
+         * Phase 4 additions: transform parity, ConvexShape, Image, advanced
+         * Text styling, advanced shader uniforms.
+         * ==================================================================== */
+
+        /* Helper to flatten a sf::FloatRect to a [x, y, w, h] float[4]. */
+        inline MTypeValue* makeRect(MTypeContext* ctx, const sf::FloatRect& r) {
+            return detail::makeFloatQuad(ctx, r.position.x, r.position.y,
+                                              r.size.x,     r.size.y);
+        }
+
+        /* ---- Sprite bounds (parity with rect/circle/text) ---- */
+
+        MTypeValue* nSpriteGlobalBounds(void*, MTypeContext* ctx,
+                                           const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_sprite_global_bounds")) {
+                return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            }
+            sf::Sprite* s = g_sprites.find(g_host->getInt(args[0]));
+            if (!s) return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            return makeRect(ctx, s->getGlobalBounds());
+        }
+        MTypeValue* nSpriteLocalBounds(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_sprite_local_bounds")) {
+                return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            }
+            sf::Sprite* s = g_sprites.find(g_host->getInt(args[0]));
+            if (!s) return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            return makeRect(ctx, s->getLocalBounds());
+        }
+
+        /* ---- Generic shape-transform shim ----
+         * Rect/Circle/ConvexShape all inherit from sf::Shape; Text from
+         * sf::Transformable. The pattern below assumes only a Transformable&
+         * is needed, so we templatize over the registry. */
+        template <typename Reg>
+        MTypeValue* setScaleImpl(MTypeContext* ctx, Reg& reg,
+                                   const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 3, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->setScale({detail::getF(args[1]), detail::getF(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* setRotationImpl(MTypeContext* ctx, Reg& reg,
+                                       const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 2, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->setRotation(sf::degrees(detail::getF(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* setOriginImpl(MTypeContext* ctx, Reg& reg,
+                                     const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 3, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->setOrigin({detail::getF(args[1]), detail::getF(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* moveImpl(MTypeContext* ctx, Reg& reg,
+                                const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 3, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->move({detail::getF(args[1]), detail::getF(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* rotateImpl(MTypeContext* ctx, Reg& reg,
+                                  const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 2, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->rotate(sf::degrees(detail::getF(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* scaleImpl(MTypeContext* ctx, Reg& reg,
+                                 const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 3, op)) return g_host->makeVoid(ctx);
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (p) p->scale({detail::getF(args[1]), detail::getF(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        template <typename Reg>
+        MTypeValue* globalBoundsImpl(MTypeContext* ctx, Reg& reg,
+                                        const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 1, op)) {
+                return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            }
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (!p) return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            return makeRect(ctx, p->getGlobalBounds());
+        }
+        template <typename Reg>
+        MTypeValue* localBoundsImpl(MTypeContext* ctx, Reg& reg,
+                                       const MTypeValue* const* args, int argc, const char* op)
+        {
+            if (!requireArgs(ctx, argc, 1, op)) {
+                return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            }
+            auto* p = reg.find(g_host->getInt(args[0]));
+            if (!p) return detail::makeFloatQuad(ctx, 0, 0, 0, 0);
+            return makeRect(ctx, p->getLocalBounds());
+        }
+
+        /* Generate `n<Type>SetScale` etc. — each is a one-line forward to the
+         * templated impl above, so the registration table stays homogeneous. */
+        #define SHAPE_TRANSFORM(N, Reg, NameLower) \
+            MTypeValue* n##N##SetScale(void*, MTypeContext* ctx, \
+                                          const MTypeValue* const* args, int argc) \
+            { return setScaleImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_set_scale"); } \
+            MTypeValue* n##N##SetRotation(void*, MTypeContext* ctx, \
+                                             const MTypeValue* const* args, int argc) \
+            { return setRotationImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_set_rotation"); } \
+            MTypeValue* n##N##SetOrigin(void*, MTypeContext* ctx, \
+                                           const MTypeValue* const* args, int argc) \
+            { return setOriginImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_set_origin"); } \
+            MTypeValue* n##N##Move(void*, MTypeContext* ctx, \
+                                       const MTypeValue* const* args, int argc) \
+            { return moveImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_move"); } \
+            MTypeValue* n##N##Rotate(void*, MTypeContext* ctx, \
+                                         const MTypeValue* const* args, int argc) \
+            { return rotateImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_rotate"); } \
+            MTypeValue* n##N##Scale(void*, MTypeContext* ctx, \
+                                        const MTypeValue* const* args, int argc) \
+            { return scaleImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_scale"); } \
+            MTypeValue* n##N##GlobalBounds(void*, MTypeContext* ctx, \
+                                               const MTypeValue* const* args, int argc) \
+            { return globalBoundsImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_global_bounds"); } \
+            MTypeValue* n##N##LocalBounds(void*, MTypeContext* ctx, \
+                                              const MTypeValue* const* args, int argc) \
+            { return localBoundsImpl(ctx, Reg, args, argc, "__native__sfml_" NameLower "_local_bounds"); }
+
+        SHAPE_TRANSFORM(Rect,   g_rectShapes,   "rect")
+        SHAPE_TRANSFORM(Circle, g_circleShapes, "circle")
+        SHAPE_TRANSFORM(Convex, g_convexShapes, "convex")
+        SHAPE_TRANSFORM(Text,   g_texts,        "text")
+
+        #undef SHAPE_TRANSFORM
+
+        /* ---- ConvexShape (polygonal shape, sibling of Rect/Circle) ---- */
+
+        MTypeValue* nConvexCreate(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_convex_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            std::size_t n = static_cast<std::size_t>(g_host->getInt(args[0]));
+            auto* c = new sf::ConvexShape(n);
+            return g_host->makeInt(ctx, g_convexShapes.insert(c));
+        }
+        MTypeValue* nConvexDestroy(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_convex_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_convexShapes.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetPointCount(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_convex_set_point_count")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setPointCount(static_cast<std::size_t>(g_host->getInt(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetPoint(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 4, "__native__sfml_convex_set_point")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setPoint(static_cast<std::size_t>(g_host->getInt(args[1])),
+                                {detail::getF(args[2]), detail::getF(args[3])});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetPosition(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_convex_set_position")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setPosition({detail::getF(args[1]), detail::getF(args[2])});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetFillColor(void*, MTypeContext* ctx,
+                                           const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_convex_set_fill_color")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setFillColor(detail::getColor(args, 1));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetOutlineColor(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_convex_set_outline_color")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setOutlineColor(detail::getColor(args, 1));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nConvexSetOutlineThickness(void*, MTypeContext* ctx,
+                                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_convex_set_outline_thickness")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[0]));
+            if (c) c->setOutlineThickness(detail::getF(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowDrawConvex(void*, MTypeContext* ctx,
+                                         const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_draw_convex")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[1]));
+            if (w && c) w->draw(*c);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nRenderTextureDrawConvex(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_render_texture_draw_convex")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderTexture* rt = g_renderTextures.find(g_host->getInt(args[0]));
+            sf::ConvexShape* c = g_convexShapes.find(g_host->getInt(args[1]));
+            if (rt && c) rt->draw(*c);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ---- Image (pixel data; CPU-side counterpart to Texture) ---- */
+
+        MTypeValue* nImageCreate(void*, MTypeContext* ctx,
+                                    const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 6, "__native__sfml_image_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            unsigned w = detail::getU(args[0]);
+            unsigned h = detail::getU(args[1]);
+            sf::Color c = detail::getColor(args, 2);
+            auto* img = new sf::Image({w, h}, c);
+            return g_host->makeInt(ctx, g_images.insert(img));
+        }
+        MTypeValue* nImageLoadFromFile(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_image_load_from_file")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            const char* path = getStr(args[0]);
+            auto* img = new sf::Image();
+            if (!img->loadFromFile(path)) {
+                delete img;
+                std::string m = std::string("__native__sfml_image_load_from_file: failed for '")
+                              + path + "'";
+                g_host->raiseError(ctx, kEx, m.c_str());
+                return g_host->makeInt(ctx, 0);
+            }
+            return g_host->makeInt(ctx, g_images.insert(img));
+        }
+        MTypeValue* nImageDestroy(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_image_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_images.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nImageSaveToFile(void*, MTypeContext* ctx,
+                                        const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_image_save_to_file")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) return g_host->makeBool(ctx, 0);
+            return g_host->makeBool(ctx, img->saveToFile(getStr(args[1])) ? 1 : 0);
+        }
+        MTypeValue* nImageSize(void*, MTypeContext* ctx,
+                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_image_size")) {
+                return detail::makeIntPair(ctx, 0, 0);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) return detail::makeIntPair(ctx, 0, 0);
+            auto s = img->getSize();
+            return detail::makeIntPair(ctx, s.x, s.y);
+        }
+        MTypeValue* nImageGetPixel(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_image_get_pixel")) {
+                return detail::makeIntQuad(ctx, 0, 0, 0, 0);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) return detail::makeIntQuad(ctx, 0, 0, 0, 0);
+            unsigned x = detail::getU(args[1]);
+            unsigned y = detail::getU(args[2]);
+            auto sz = img->getSize();
+            if (x >= sz.x || y >= sz.y) return detail::makeIntQuad(ctx, 0, 0, 0, 0);
+            sf::Color c = img->getPixel({x, y});
+            return detail::makeIntQuad(ctx, c.r, c.g, c.b, c.a);
+        }
+        MTypeValue* nImageSetPixel(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 7, "__native__sfml_image_set_pixel")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) return g_host->makeVoid(ctx);
+            unsigned x = detail::getU(args[1]);
+            unsigned y = detail::getU(args[2]);
+            auto sz = img->getSize();
+            if (x >= sz.x || y >= sz.y) return g_host->makeVoid(ctx);
+            img->setPixel({x, y}, detail::getColor(args, 3));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nImageCreateMaskFromColor(void*, MTypeContext* ctx,
+                                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 6, "__native__sfml_image_create_mask_from_color")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) return g_host->makeVoid(ctx);
+            sf::Color match = detail::getColor(args, 1);
+            std::uint8_t alpha = detail::getU8(args[5]);
+            img->createMaskFromColor(match, alpha);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* Texture <-> Image conversions. */
+        MTypeValue* nTextureLoadFromImage(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_texture_load_from_image")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            sf::Image* img = g_images.find(g_host->getInt(args[0]));
+            if (!img) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_texture_load_from_image: invalid image id");
+                return g_host->makeInt(ctx, 0);
+            }
+            auto* tex = new sf::Texture();
+            if (!tex->loadFromImage(*img)) {
+                delete tex;
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_texture_load_from_image: loadFromImage failed");
+                return g_host->makeInt(ctx, 0);
+            }
+            return g_host->makeInt(ctx, g_textures.insert(tex));
+        }
+        MTypeValue* nTextureCopyToImage(void*, MTypeContext* ctx,
+                                            const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_texture_copy_to_image")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            sf::Texture* tex = g_textures.find(g_host->getInt(args[0]));
+            if (!tex) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_texture_copy_to_image: invalid texture id");
+                return g_host->makeInt(ctx, 0);
+            }
+            auto* img = new sf::Image(tex->copyToImage());
+            return g_host->makeInt(ctx, g_images.insert(img));
+        }
+        MTypeValue* nTextureUpdateFromImage(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_texture_update_from_image")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Texture* tex = g_textures.find(g_host->getInt(args[0]));
+            sf::Image*   img = g_images.find(g_host->getInt(args[1]));
+            if (tex && img) tex->update(*img);
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ---- Text advanced styling ---- */
+
+        MTypeValue* nTextSetOutlineColor(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_text_set_outline_color")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Text* t = g_texts.find(g_host->getInt(args[0]));
+            if (t) t->setOutlineColor(detail::getColor(args, 1));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nTextSetOutlineThickness(void*, MTypeContext* ctx,
+                                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_text_set_outline_thickness")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Text* t = g_texts.find(g_host->getInt(args[0]));
+            if (t) t->setOutlineThickness(detail::getF(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nTextSetStyle(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_text_set_style")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Text* t = g_texts.find(g_host->getInt(args[0]));
+            if (t) t->setStyle(static_cast<std::uint32_t>(g_host->getInt(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nTextSetLetterSpacing(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_text_set_letter_spacing")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Text* t = g_texts.find(g_host->getInt(args[0]));
+            if (t) t->setLetterSpacing(detail::getF(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nTextSetLineSpacing(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_text_set_line_spacing")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Text* t = g_texts.find(g_host->getInt(args[0]));
+            if (t) t->setLineSpacing(detail::getF(args[1]));
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ---- Advanced shader uniforms ---- */
+
+        MTypeValue* nShaderLoadVertFragFromMemory(void*, MTypeContext* ctx,
+                                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_load_vert_frag_from_memory")) {
+                return g_host->makeBool(ctx, 0);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeBool(ctx, 0);
+            return g_host->makeBool(ctx,
+                sh->loadFromMemory(getStr(args[1]), getStr(args[2])) ? 1 : 0);
+        }
+        MTypeValue* nShaderSetUniformBool(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_bool")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (sh) sh->setUniform(getStr(args[1]), detail::getB(args[2]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformIvec2(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 4, "__native__sfml_shader_set_uniform_ivec2")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Ivec2(
+                static_cast<int>(g_host->getInt(args[2])),
+                static_cast<int>(g_host->getInt(args[3]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformIvec3(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 5, "__native__sfml_shader_set_uniform_ivec3")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Ivec3(
+                static_cast<int>(g_host->getInt(args[2])),
+                static_cast<int>(g_host->getInt(args[3])),
+                static_cast<int>(g_host->getInt(args[4]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformIvec4(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 6, "__native__sfml_shader_set_uniform_ivec4")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            sh->setUniform(getStr(args[1]), sf::Glsl::Ivec4(
+                static_cast<int>(g_host->getInt(args[2])),
+                static_cast<int>(g_host->getInt(args[3])),
+                static_cast<int>(g_host->getInt(args[4])),
+                static_cast<int>(g_host->getInt(args[5]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformColor(void*, MTypeContext* ctx,
+                                               const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 6, "__native__sfml_shader_set_uniform_color")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            /* sf::Glsl::Vec4 is constructible from sf::Color (normalizes 0-255 -> 0-1). */
+            sh->setUniform(getStr(args[1]), sf::Glsl::Vec4(detail::getColor(args, 2)));
+            return g_host->makeVoid(ctx);
+        }
+        /* Read an mType float[] into a flat std::vector<float>. Used by mat/
+         * array uniform setters. Returns empty vector on type mismatch. */
+        inline std::vector<float> readFloatArray(const MTypeValue* arr)
+        {
+            std::vector<float> out;
+            if (g_host->getTag(arr) != MT_TAG_ARRAY) return out;
+            std::size_t n = g_host->arrayLen(arr);
+            out.reserve(n);
+            for (std::size_t i = 0; i < n; ++i) {
+                const MTypeValue* v = g_host->arrayGet(nullptr, arr, i);
+                out.push_back(static_cast<float>(g_host->getFloat(v)));
+            }
+            return out;
+        }
+        MTypeValue* nShaderSetUniformMat3(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_mat3")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            auto vals = readFloatArray(args[2]);
+            if (vals.size() != 9) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_shader_set_uniform_mat3: array must have length 9");
+                return g_host->makeVoid(ctx);
+            }
+            sh->setUniform(getStr(args[1]), sf::Glsl::Mat3(vals.data()));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformMat4(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_mat4")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            auto vals = readFloatArray(args[2]);
+            if (vals.size() != 16) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_shader_set_uniform_mat4: array must have length 16");
+                return g_host->makeVoid(ctx);
+            }
+            sh->setUniform(getStr(args[1]), sf::Glsl::Mat4(vals.data()));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformFloatArray(void*, MTypeContext* ctx,
+                                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_float_array")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            auto vals = readFloatArray(args[2]);
+            sh->setUniformArray(getStr(args[1]), vals.data(), vals.size());
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nShaderSetUniformVec4Array(void*, MTypeContext* ctx,
+                                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_shader_set_uniform_vec4_array")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
+            if (!sh) return g_host->makeVoid(ctx);
+            auto vals = readFloatArray(args[2]);
+            if (vals.size() % 4 != 0) {
+                g_host->raiseError(ctx, kEx,
+                    "__native__sfml_shader_set_uniform_vec4_array: array length must be multiple of 4");
+                return g_host->makeVoid(ctx);
+            }
+            std::vector<sf::Glsl::Vec4> packed;
+            packed.reserve(vals.size() / 4);
+            for (std::size_t i = 0; i < vals.size(); i += 4) {
+                packed.emplace_back(vals[i], vals[i+1], vals[i+2], vals[i+3]);
+            }
+            sh->setUniformArray(getStr(args[1]), packed.data(), packed.size());
+            return g_host->makeVoid(ctx);
+        }
     }
 
     void registerGraphicsNatives(MTypeContext* ctx)
@@ -1202,5 +1828,72 @@ namespace mtypesfml
         reg("__native__sfml_shader_set_uniform_current_texture",  &nShaderSetUniformCurrentTexture);
         reg("__native__sfml_window_draw_sprite_shader",           &nWindowDrawSpriteShader);
         reg("__native__sfml_window_draw_vertex_array_shader",     &nWindowDrawVertexArrayShader);
+
+        /* ---- Phase 4 additions ---- */
+
+        /* Sprite bounds (the other shapes get theirs from the macro block below). */
+        reg("__native__sfml_sprite_global_bounds",     &nSpriteGlobalBounds);
+        reg("__native__sfml_sprite_local_bounds",      &nSpriteLocalBounds);
+
+        /* Transform parity — rect/circle/convex/text get the full 8-func set. */
+        #define REG_SHAPE_TRANSFORM(NameLower, N) \
+            reg("__native__sfml_" NameLower "_set_scale",     &n##N##SetScale); \
+            reg("__native__sfml_" NameLower "_set_rotation",  &n##N##SetRotation); \
+            reg("__native__sfml_" NameLower "_set_origin",    &n##N##SetOrigin); \
+            reg("__native__sfml_" NameLower "_move",          &n##N##Move); \
+            reg("__native__sfml_" NameLower "_rotate",        &n##N##Rotate); \
+            reg("__native__sfml_" NameLower "_scale",         &n##N##Scale); \
+            reg("__native__sfml_" NameLower "_global_bounds", &n##N##GlobalBounds); \
+            reg("__native__sfml_" NameLower "_local_bounds",  &n##N##LocalBounds);
+
+        REG_SHAPE_TRANSFORM("rect",   Rect)
+        REG_SHAPE_TRANSFORM("circle", Circle)
+        REG_SHAPE_TRANSFORM("convex", Convex)
+        REG_SHAPE_TRANSFORM("text",   Text)
+        #undef REG_SHAPE_TRANSFORM
+
+        /* ConvexShape lifecycle / point setters / color / draw. */
+        reg("__native__sfml_convex_create",                  &nConvexCreate);
+        reg("__native__sfml_convex_destroy",                 &nConvexDestroy);
+        reg("__native__sfml_convex_set_point_count",         &nConvexSetPointCount);
+        reg("__native__sfml_convex_set_point",               &nConvexSetPoint);
+        reg("__native__sfml_convex_set_position",            &nConvexSetPosition);
+        reg("__native__sfml_convex_set_fill_color",          &nConvexSetFillColor);
+        reg("__native__sfml_convex_set_outline_color",       &nConvexSetOutlineColor);
+        reg("__native__sfml_convex_set_outline_thickness",   &nConvexSetOutlineThickness);
+        reg("__native__sfml_window_draw_convex",             &nWindowDrawConvex);
+        reg("__native__sfml_render_texture_draw_convex",     &nRenderTextureDrawConvex);
+
+        /* Image. */
+        reg("__native__sfml_image_create",                   &nImageCreate);
+        reg("__native__sfml_image_load_from_file",           &nImageLoadFromFile);
+        reg("__native__sfml_image_destroy",                  &nImageDestroy);
+        reg("__native__sfml_image_save_to_file",             &nImageSaveToFile);
+        reg("__native__sfml_image_size",                     &nImageSize);
+        reg("__native__sfml_image_get_pixel",                &nImageGetPixel);
+        reg("__native__sfml_image_set_pixel",                &nImageSetPixel);
+        reg("__native__sfml_image_create_mask_from_color",   &nImageCreateMaskFromColor);
+        reg("__native__sfml_texture_load_from_image",        &nTextureLoadFromImage);
+        reg("__native__sfml_texture_copy_to_image",          &nTextureCopyToImage);
+        reg("__native__sfml_texture_update_from_image",      &nTextureUpdateFromImage);
+
+        /* Text advanced styling. */
+        reg("__native__sfml_text_set_outline_color",         &nTextSetOutlineColor);
+        reg("__native__sfml_text_set_outline_thickness",     &nTextSetOutlineThickness);
+        reg("__native__sfml_text_set_style",                 &nTextSetStyle);
+        reg("__native__sfml_text_set_letter_spacing",        &nTextSetLetterSpacing);
+        reg("__native__sfml_text_set_line_spacing",          &nTextSetLineSpacing);
+
+        /* Advanced shader uniforms. */
+        reg("__native__sfml_shader_load_vert_frag_from_memory", &nShaderLoadVertFragFromMemory);
+        reg("__native__sfml_shader_set_uniform_bool",           &nShaderSetUniformBool);
+        reg("__native__sfml_shader_set_uniform_ivec2",          &nShaderSetUniformIvec2);
+        reg("__native__sfml_shader_set_uniform_ivec3",          &nShaderSetUniformIvec3);
+        reg("__native__sfml_shader_set_uniform_ivec4",          &nShaderSetUniformIvec4);
+        reg("__native__sfml_shader_set_uniform_color",          &nShaderSetUniformColor);
+        reg("__native__sfml_shader_set_uniform_mat3",           &nShaderSetUniformMat3);
+        reg("__native__sfml_shader_set_uniform_mat4",           &nShaderSetUniformMat4);
+        reg("__native__sfml_shader_set_uniform_float_array",    &nShaderSetUniformFloatArray);
+        reg("__native__sfml_shader_set_uniform_vec4_array",     &nShaderSetUniformVec4Array);
     }
 }

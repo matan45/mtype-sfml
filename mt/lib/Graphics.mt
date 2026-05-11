@@ -13,12 +13,27 @@ class Texture {
     public constructor(int h) { this.handle = h; }
     public function destroy(): void { __native__sfml_texture_destroy(this.handle); }
     public function size(): int[]    { return __native__sfml_texture_size(this.handle); }
+
+    // Re-upload pixels from a CPU-side Image. Image and Texture must
+    // already have matching dimensions.
+    public function updateFromImage(Image img): void {
+        __native__sfml_texture_update_from_image(this.handle, img.handle);
+    }
+    // Snapshot the GPU texture back into a CPU-side Image. Caller owns
+    // the returned Image and must .destroy() it.
+    public function copyToImage(): Image {
+        return new Image(__native__sfml_texture_copy_to_image(this.handle));
+    }
 }
 
 class Textures {
     // Load PNG / JPG / BMP / TGA into a GPU-resident texture.
     public static function load(string path): Texture {
         return new Texture(__native__sfml_texture_load_from_file(path));
+    }
+    // Upload an Image into a fresh Texture.
+    public static function fromImage(Image img): Texture {
+        return new Texture(__native__sfml_texture_load_from_image(img.handle));
     }
 }
 
@@ -42,6 +57,13 @@ class Sprite {
     }
     public function setColor(int r, int g, int b, int a): void {
         __native__sfml_sprite_set_color(this.handle, r, g, b, a);
+    }
+    // [x, y, w, h] axis-aligned bounding box in world space.
+    public function globalBounds(): float[] {
+        return __native__sfml_sprite_global_bounds(this.handle);
+    }
+    public function localBounds(): float[] {
+        return __native__sfml_sprite_local_bounds(this.handle);
     }
 }
 
@@ -71,6 +93,28 @@ class RectangleShape {
     public function setOutlineThickness(float t): void {
         __native__sfml_rect_set_outline_thickness(this.handle, t);
     }
+
+    // ---- transform parity (Sprite-style transforms on RectangleShape) ----
+    public function setScale(float sx, float sy): void {
+        __native__sfml_rect_set_scale(this.handle, sx, sy);
+    }
+    public function setRotation(float degrees): void {
+        __native__sfml_rect_set_rotation(this.handle, degrees);
+    }
+    public function setOrigin(float ox, float oy): void {
+        __native__sfml_rect_set_origin(this.handle, ox, oy);
+    }
+    public function move(float dx, float dy): void {
+        __native__sfml_rect_move(this.handle, dx, dy);
+    }
+    public function rotate(float degrees): void {
+        __native__sfml_rect_rotate(this.handle, degrees);
+    }
+    public function scale(float sx, float sy): void {
+        __native__sfml_rect_scale(this.handle, sx, sy);
+    }
+    public function globalBounds(): float[] { return __native__sfml_rect_global_bounds(this.handle); }
+    public function localBounds():  float[] { return __native__sfml_rect_local_bounds(this.handle); }
 }
 
 class Rectangles {
@@ -99,6 +143,28 @@ class CircleShape {
     public function setOutlineThickness(float t): void {
         __native__sfml_circle_set_outline_thickness(this.handle, t);
     }
+
+    // ---- transform parity ----
+    public function setScale(float sx, float sy): void {
+        __native__sfml_circle_set_scale(this.handle, sx, sy);
+    }
+    public function setRotation(float degrees): void {
+        __native__sfml_circle_set_rotation(this.handle, degrees);
+    }
+    public function setOrigin(float ox, float oy): void {
+        __native__sfml_circle_set_origin(this.handle, ox, oy);
+    }
+    public function move(float dx, float dy): void {
+        __native__sfml_circle_move(this.handle, dx, dy);
+    }
+    public function rotate(float degrees): void {
+        __native__sfml_circle_rotate(this.handle, degrees);
+    }
+    public function scale(float sx, float sy): void {
+        __native__sfml_circle_scale(this.handle, sx, sy);
+    }
+    public function globalBounds(): float[] { return __native__sfml_circle_global_bounds(this.handle); }
+    public function localBounds():  float[] { return __native__sfml_circle_local_bounds(this.handle); }
 }
 
 class Circles {
@@ -136,6 +202,57 @@ class Text {
     public function setFillColor(int r, int g, int b, int a): void {
         __native__sfml_text_set_fill_color(this.handle, r, g, b, a);
     }
+
+    // ---- advanced styling ----
+    public function setOutlineColor(int r, int g, int b, int a): void {
+        __native__sfml_text_set_outline_color(this.handle, r, g, b, a);
+    }
+    public function setOutlineThickness(float t): void {
+        __native__sfml_text_set_outline_thickness(this.handle, t);
+    }
+    // style is a bitmask of TextStyle constants (Regular=0, Bold=1, Italic=2,
+    // Underlined=4, StrikeThrough=8 — OR them together).
+    public function setStyle(int style): void {
+        __native__sfml_text_set_style(this.handle, style);
+    }
+    // factor: 1.0 = default. Bigger values widen letter / line gaps.
+    public function setLetterSpacing(float factor): void {
+        __native__sfml_text_set_letter_spacing(this.handle, factor);
+    }
+    public function setLineSpacing(float factor): void {
+        __native__sfml_text_set_line_spacing(this.handle, factor);
+    }
+
+    // ---- transform parity ----
+    public function setScale(float sx, float sy): void {
+        __native__sfml_text_set_scale(this.handle, sx, sy);
+    }
+    public function setRotation(float degrees): void {
+        __native__sfml_text_set_rotation(this.handle, degrees);
+    }
+    public function setOrigin(float ox, float oy): void {
+        __native__sfml_text_set_origin(this.handle, ox, oy);
+    }
+    public function move(float dx, float dy): void {
+        __native__sfml_text_move(this.handle, dx, dy);
+    }
+    public function rotate(float degrees): void {
+        __native__sfml_text_rotate(this.handle, degrees);
+    }
+    public function scale(float sx, float sy): void {
+        __native__sfml_text_scale(this.handle, sx, sy);
+    }
+    public function globalBounds(): float[] { return __native__sfml_text_global_bounds(this.handle); }
+    public function localBounds():  float[] { return __native__sfml_text_local_bounds(this.handle); }
+}
+
+// sf::Text::Style bitmask values.
+class TextStyle {
+    public static function regular():       int { return 0; }
+    public static function bold():          int { return 1; }
+    public static function italic():        int { return 2; }
+    public static function underlined():    int { return 4; }
+    public static function strikeThrough(): int { return 8; }
 }
 
 class Texts {
@@ -246,6 +363,9 @@ class Draw {
                                                   Texture tex): void {
         __native__sfml_window_draw_vertex_array_textured(w.handle, va.handle, tex.handle);
     }
+    public static function convex(RenderWindow w, ConvexShape c): void {
+        __native__sfml_window_draw_convex(w.handle, c.handle);
+    }
 }
 
 // Camera helpers on the window itself — pair set/reset around a draw to
@@ -321,6 +441,9 @@ class DrawTo {
     public static function vertexArray(RenderTexture rt, VertexArray va): void {
         __native__sfml_render_texture_draw_vertex_array(rt.handle, va.handle);
     }
+    public static function convex(RenderTexture rt, ConvexShape c): void {
+        __native__sfml_render_texture_draw_convex(rt.handle, c.handle);
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -376,6 +499,42 @@ class Shader {
     public function setCurrentTexture(string name): void {
         __native__sfml_shader_set_uniform_current_texture(this.handle, name);
     }
+
+    // ---- Phase 4: advanced uniforms ----
+    public function loadVertFragFromMemory(string vertSrc, string fragSrc): bool {
+        return __native__sfml_shader_load_vert_frag_from_memory(this.handle, vertSrc, fragSrc);
+    }
+    public function setBool(string name, bool value): void {
+        __native__sfml_shader_set_uniform_bool(this.handle, name, value);
+    }
+    public function setIvec2(string name, int x, int y): void {
+        __native__sfml_shader_set_uniform_ivec2(this.handle, name, x, y);
+    }
+    public function setIvec3(string name, int x, int y, int z): void {
+        __native__sfml_shader_set_uniform_ivec3(this.handle, name, x, y, z);
+    }
+    public function setIvec4(string name, int x, int y, int z, int w): void {
+        __native__sfml_shader_set_uniform_ivec4(this.handle, name, x, y, z, w);
+    }
+    // Normalizes 0-255 sf::Color to a vec4 in [0, 1].
+    public function setColor(string name, int r, int g, int b, int a): void {
+        __native__sfml_shader_set_uniform_color(this.handle, name, r, g, b, a);
+    }
+    // Column-major 9 floats.
+    public function setMat3(string name, float[] m): void {
+        __native__sfml_shader_set_uniform_mat3(this.handle, name, m);
+    }
+    // Column-major 16 floats.
+    public function setMat4(string name, float[] m): void {
+        __native__sfml_shader_set_uniform_mat4(this.handle, name, m);
+    }
+    public function setFloatArray(string name, float[] values): void {
+        __native__sfml_shader_set_uniform_float_array(this.handle, name, values);
+    }
+    // Flat-packed: every 4 consecutive floats form one vec4.
+    public function setVec4Array(string name, float[] values): void {
+        __native__sfml_shader_set_uniform_vec4_array(this.handle, name, values);
+    }
 }
 
 class Shaders {
@@ -393,5 +552,107 @@ class DrawShader {
                                           Texture tex, Shader sh): void {
         __native__sfml_window_draw_vertex_array_shader(w.handle, va.handle,
                                                         tex.handle, sh.handle);
+    }
+}
+
+// ----------------------------------------------------------------------
+// ConvexShape — arbitrary convex polygon (sibling of RectangleShape /
+// CircleShape).
+// ----------------------------------------------------------------------
+
+class ConvexShape {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_convex_destroy(this.handle); }
+
+    public function setPointCount(int n): void {
+        __native__sfml_convex_set_point_count(this.handle, n);
+    }
+    public function setPoint(int index, float x, float y): void {
+        __native__sfml_convex_set_point(this.handle, index, x, y);
+    }
+
+    public function setPosition(float x, float y): void {
+        __native__sfml_convex_set_position(this.handle, x, y);
+    }
+    public function setFillColor(int r, int g, int b, int a): void {
+        __native__sfml_convex_set_fill_color(this.handle, r, g, b, a);
+    }
+    public function setOutlineColor(int r, int g, int b, int a): void {
+        __native__sfml_convex_set_outline_color(this.handle, r, g, b, a);
+    }
+    public function setOutlineThickness(float t): void {
+        __native__sfml_convex_set_outline_thickness(this.handle, t);
+    }
+
+    // ---- transform parity ----
+    public function setScale(float sx, float sy): void {
+        __native__sfml_convex_set_scale(this.handle, sx, sy);
+    }
+    public function setRotation(float degrees): void {
+        __native__sfml_convex_set_rotation(this.handle, degrees);
+    }
+    public function setOrigin(float ox, float oy): void {
+        __native__sfml_convex_set_origin(this.handle, ox, oy);
+    }
+    public function move(float dx, float dy): void {
+        __native__sfml_convex_move(this.handle, dx, dy);
+    }
+    public function rotate(float degrees): void {
+        __native__sfml_convex_rotate(this.handle, degrees);
+    }
+    public function scale(float sx, float sy): void {
+        __native__sfml_convex_scale(this.handle, sx, sy);
+    }
+    public function globalBounds(): float[] { return __native__sfml_convex_global_bounds(this.handle); }
+    public function localBounds():  float[] { return __native__sfml_convex_local_bounds(this.handle); }
+}
+
+class ConvexShapes {
+    public static function create(int pointCount): ConvexShape {
+        return new ConvexShape(__native__sfml_convex_create(pointCount));
+    }
+}
+
+// ----------------------------------------------------------------------
+// Image — CPU-side pixel buffer. Counterpart to Texture (GPU). Use for
+// loading/saving PNG/JPG, procedural pixel art, screenshots.
+// ----------------------------------------------------------------------
+
+class Image {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_image_destroy(this.handle); }
+
+    // [width, height] in pixels.
+    public function size(): int[] { return __native__sfml_image_size(this.handle); }
+
+    public function saveToFile(string path): bool {
+        return __native__sfml_image_save_to_file(this.handle, path);
+    }
+
+    // Returns [r, g, b, a] each in 0..255. Out-of-range coords return all zeros.
+    public function getPixel(int x, int y): int[] {
+        return __native__sfml_image_get_pixel(this.handle, x, y);
+    }
+    public function setPixel(int x, int y, int r, int g, int b, int a): void {
+        __native__sfml_image_set_pixel(this.handle, x, y, r, g, b, a);
+    }
+
+    // Replaces every pixel whose (r,g,b,a) matches `match` with an alpha
+    // of `alpha` (other channels left unchanged). Common idiom: pass
+    // (255,0,255,255) and alpha=0 to mask out magenta keys.
+    public function createMaskFromColor(int r, int g, int b, int a, int alpha): void {
+        __native__sfml_image_create_mask_from_color(this.handle, r, g, b, a, alpha);
+    }
+}
+
+class Images {
+    public static function create(int width, int height,
+                                    int r, int g, int b, int a): Image {
+        return new Image(__native__sfml_image_create(width, height, r, g, b, a));
+    }
+    public static function load(string path): Image {
+        return new Image(__native__sfml_image_load_from_file(path));
     }
 }

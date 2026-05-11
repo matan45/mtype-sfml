@@ -25,6 +25,46 @@ class RenderWindow {
     public function pollEvent(): int {
         return __native__sfml_poll_event(this.handle);
     }
+
+    // ---- settings ----
+    public function setTitle(string title): void {
+        __native__sfml_window_set_title(this.handle, title);
+    }
+    public function setPosition(int x, int y): void {
+        __native__sfml_window_set_position(this.handle, x, y);
+    }
+    public function setSize(int w, int h): void {
+        __native__sfml_window_set_size(this.handle, w, h);
+    }
+    public function setVsync(bool enabled): void {
+        __native__sfml_window_set_vsync(this.handle, enabled);
+    }
+    public function setFramerateLimit(int fps): void {
+        __native__sfml_window_set_framerate_limit(this.handle, fps);
+    }
+    public function setKeyRepeatEnabled(bool enabled): void {
+        __native__sfml_window_set_key_repeat(this.handle, enabled);
+    }
+    public function setMouseCursorVisible(bool visible): void {
+        __native__sfml_window_set_mouse_cursor_visible(this.handle, visible);
+    }
+    public function setMouseCursorGrabbed(bool grabbed): void {
+        __native__sfml_window_set_mouse_cursor_grabbed(this.handle, grabbed);
+    }
+    public function hasFocus(): bool { return __native__sfml_window_has_focus(this.handle); }
+    public function requestFocus(): void { __native__sfml_window_request_focus(this.handle); }
+
+    public function setMousePosition(int x, int y): void {
+        __native__sfml_window_set_mouse_position(this.handle, x, y);
+    }
+    // [x, y] in window-local pixels.
+    public function mousePosition(): int[] {
+        return __native__sfml_mouse_position_window(this.handle);
+    }
+
+    public function setMouseCursor(Cursor cursor): void {
+        __native__sfml_window_set_mouse_cursor(this.handle, cursor.handle);
+    }
 }
 
 class Sfml {
@@ -139,4 +179,76 @@ class MouseButton {
     public static function middle(): int { return 2; }
     public static function xButton1(): int { return 3; }
     public static function xButton2(): int { return 4; }
+}
+
+// sf::Cursor::Type values. Use with Cursors::createFromSystem.
+class CursorType {
+    public static function arrow():           int { return 0; }
+    public static function arrowWait():       int { return 1; }
+    public static function wait():            int { return 2; }
+    public static function text():            int { return 3; }
+    public static function hand():            int { return 4; }
+    public static function sizeHorizontal():  int { return 5; }
+    public static function sizeVertical():    int { return 6; }
+    public static function sizeTopLeftBottomRight():     int { return 7; }
+    public static function sizeBottomLeftTopRight():     int { return 8; }
+    public static function sizeLeft():        int { return 9; }
+    public static function sizeRight():       int { return 10; }
+    public static function sizeTop():         int { return 11; }
+    public static function sizeBottom():      int { return 12; }
+    public static function sizeTopLeft():     int { return 13; }
+    public static function sizeBottomRight(): int { return 14; }
+    public static function sizeBottomLeft():  int { return 15; }
+    public static function sizeTopRight():    int { return 16; }
+    public static function sizeAll():         int { return 17; }
+    public static function cross():           int { return 18; }
+    public static function help():            int { return 19; }
+    public static function notAllowed():      int { return 20; }
+}
+
+class Cursor {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_cursor_destroy(this.handle); }
+}
+
+class Cursors {
+    // type: one of CursorType::xxx().
+    public static function createFromSystem(int type): Cursor {
+        return new Cursor(__native__sfml_cursor_create_from_system(type));
+    }
+}
+
+// sf::Joystick::Axis values (sf::Joystick::Axis enum order).
+class JoystickAxis {
+    public static function x():    int { return 0; }
+    public static function y():    int { return 1; }
+    public static function z():    int { return 2; }
+    public static function r():    int { return 3; }
+    public static function u():    int { return 4; }
+    public static function v():    int { return 5; }
+    public static function povX(): int { return 6; }
+    public static function povY(): int { return 7; }
+}
+
+// Joystick state — SFML polls the OS automatically each frame in
+// pollEvent(); call update() if you're sampling outside that loop.
+class Joystick {
+    public static function update(): void { __native__sfml_joystick_update(); }
+    public static function isConnected(int id): bool {
+        return __native__sfml_joystick_is_connected(id);
+    }
+    public static function buttonCount(int id): int {
+        return __native__sfml_joystick_button_count(id);
+    }
+    public static function hasAxis(int id, int axis): bool {
+        return __native__sfml_joystick_axis_is_available(id, axis);
+    }
+    public static function isButtonPressed(int id, int button): bool {
+        return __native__sfml_joystick_is_button_pressed(id, button);
+    }
+    // Returns [-100.0, 100.0].
+    public static function axisPosition(int id, int axis): float {
+        return __native__sfml_joystick_axis_position(id, axis);
+    }
 }

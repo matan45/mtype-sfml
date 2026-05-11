@@ -20,10 +20,17 @@ namespace sf
     class Text;
     class RectangleShape;
     class CircleShape;
+    class ConvexShape;
     class VertexArray;
     class View;
     class RenderTexture;
     class Shader;
+    class Image;
+    class Clock;
+    class Cursor;
+    class SoundBuffer;
+    class Sound;
+    class Music;
 }
 
 struct ImFont;
@@ -39,14 +46,23 @@ namespace mtypesfml
     extern HandleRegistry<sf::Text>           g_texts;
     extern HandleRegistry<sf::RectangleShape> g_rectShapes;
     extern HandleRegistry<sf::CircleShape>    g_circleShapes;
+    extern HandleRegistry<sf::ConvexShape>    g_convexShapes;
     extern HandleRegistry<sf::VertexArray>    g_vertexArrays;
     extern HandleRegistry<sf::View>           g_views;
     extern HandleRegistry<sf::RenderTexture>  g_renderTextures;
     extern HandleRegistry<sf::Shader>         g_shaders;
+    extern HandleRegistry<sf::Image>          g_images;
+    extern HandleRegistry<sf::Clock>          g_clocks;
+    extern HandleRegistry<sf::Cursor>         g_cursors;
+    extern HandleRegistry<sf::SoundBuffer>    g_soundBuffers;
+    extern HandleRegistry<sf::Sound>          g_sounds;
+    extern HandleRegistry<sf::Music>          g_music;
     extern HandleRegistry<ImFont>             g_imguiFonts;
 
+    void registerSystemNatives(MTypeContext* ctx);
     void registerWindowNatives(MTypeContext* ctx);
     void registerGraphicsNatives(MTypeContext* ctx);
+    void registerAudioNatives(MTypeContext* ctx);
     void registerImGuiNatives(MTypeContext* ctx);
 
     /* Hand WindowBindings' last-polled sf::Event to ImGui::SFML.
