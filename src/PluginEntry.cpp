@@ -17,6 +17,7 @@ namespace mtypesfml
     HandleRegistry<sf::View>           g_views;
     HandleRegistry<sf::RenderTexture>  g_renderTextures;
     HandleRegistry<sf::Shader>         g_shaders;
+    HandleRegistry<ImFont>             g_imguiFonts;
 }
 
 extern "C" MTYPE_PLUGIN_EXPORT
@@ -31,5 +32,6 @@ int mtype_plugin_register(uint32_t hostAbiVersion,
 
     mtypesfml::registerWindowNatives(registrationCtx);
     mtypesfml::registerGraphicsNatives(registrationCtx);
+    mtypesfml::registerImGuiNatives(registrationCtx);
     return 0;
 }

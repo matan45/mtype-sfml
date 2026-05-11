@@ -331,11 +331,11 @@ class DrawTo {
 // drawable's own texture (the common case for post-processing).
 // ----------------------------------------------------------------------
 
-// sf::Shader::Type values.
+// sf::Shader::Type values (SFML 3 enum class order: Vertex, Geometry, Fragment).
 class ShaderType {
-    public static function vertex():   int { return 0; }
-    public static function fragment(): int { return 1; }
-    public static function geometry(): int { return 2; }
+    public static final int VERTEX = 0;
+    public static final int FRAGMENT = 1;
+    public static final int GEOMETRY = 2;
 }
 
 class Shader {

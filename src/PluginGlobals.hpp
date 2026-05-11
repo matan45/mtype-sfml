@@ -26,6 +26,8 @@ namespace sf
     class Shader;
 }
 
+struct ImFont;
+
 namespace mtypesfml
 {
     extern const MTypePluginHost* g_host;
@@ -41,7 +43,13 @@ namespace mtypesfml
     extern HandleRegistry<sf::View>           g_views;
     extern HandleRegistry<sf::RenderTexture>  g_renderTextures;
     extern HandleRegistry<sf::Shader>         g_shaders;
+    extern HandleRegistry<ImFont>             g_imguiFonts;
 
     void registerWindowNatives(MTypeContext* ctx);
     void registerGraphicsNatives(MTypeContext* ctx);
+    void registerImGuiNatives(MTypeContext* ctx);
+
+    /* Hand WindowBindings' last-polled sf::Event to ImGui::SFML.
+     * Implemented in WindowBindings.cpp where g_lastEvent is in scope. */
+    void imguiProcessLastEvent(sf::RenderWindow& win);
 }

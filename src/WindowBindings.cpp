@@ -20,6 +20,8 @@
 #include <SFML/Window/VideoMode.hpp>
 #include <SFML/System/String.hpp>
 
+#include <imgui-SFML.h>
+
 #include <optional>
 #include <string>
 
@@ -301,6 +303,17 @@ namespace mtypesfml
             int btn = static_cast<int>(g_host->getInt(args[0]));
             return g_host->makeBool(ctx,
                 sf::Mouse::isButtonPressed(static_cast<sf::Mouse::Button>(btn)) ? 1 : 0);
+        }
+    }
+
+    /* Bridge for ImGui: forward the most-recently-polled SFML event to
+     * ImGui::SFML::ProcessEvent. Called from ImGuiBindings.cpp via the
+     * declaration in PluginGlobals.hpp so we don't have to expose
+     * g_lastEvent across translation units. */
+    void imguiProcessLastEvent(sf::RenderWindow& win)
+    {
+        if (g_lastEvent) {
+            ImGui::SFML::ProcessEvent(win, *g_lastEvent);
         }
     }
 
