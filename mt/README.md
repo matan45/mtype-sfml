@@ -38,3 +38,4 @@ exits.
 | `lib/Sfml.mt`     | mType wrappers around `__native__sfml_*` natives — `RenderWindow`, event poll + tag IDs, `Event` payload accessors, realtime `Keyboard`/`Mouse`, plus `Key` / `MouseButton` constant classes. |
 | `lib/Graphics.mt` | Wrappers for `Texture`, `Sprite`, `RectangleShape`, `CircleShape`, `Font`, `Text`, and a flat `Draw::sprite/rect/circle/text(window, …)` helper. |
 | `demo/demo.mt`    | The demo above — event loop, realtime WASD movement, shape drawing. |
+| `demo/demo_vertex_view.mt` | Phase 2 — custom rendering. A 64-segment rainbow triangle-strip ribbon built once with `VertexArray`, viewed through a `View` (camera) that pans (WASD), zooms (Q/E), and rotates (R). Shows the world-space-then-HUD pattern (`Camera::setView` ↔ `Camera::resetView`). |

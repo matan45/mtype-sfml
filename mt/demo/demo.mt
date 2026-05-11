@@ -32,7 +32,7 @@ int keyA   = Key::a();
 int keyS   = Key::s();
 int keyD   = Key::d();
 
-float speed = 240.0;     // px/sec
+float speed = 10.0;     // px/sec
 float t = 0.0;           // accumulator for orb orbit
 float dtMs = 16.0;       // simple fixed-ish timestep; SFML's Clock could replace this
 

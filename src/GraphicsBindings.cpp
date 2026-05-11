@@ -17,6 +17,10 @@
 #include <SFML/Graphics/Text.hpp>
 #include <SFML/Graphics/RectangleShape.hpp>
 #include <SFML/Graphics/CircleShape.hpp>
+#include <SFML/Graphics/VertexArray.hpp>
+#include <SFML/Graphics/View.hpp>
+#include <SFML/Graphics/PrimitiveType.hpp>
+#include <SFML/Graphics/RenderStates.hpp>
 #include <SFML/System/Angle.hpp>
 
 #include <string>
@@ -476,6 +480,228 @@ namespace mtypesfml
             if (w && t) w->draw(*t);
             return g_host->makeVoid(ctx);
         }
+
+        /* ---- VertexArray (procedural geometry) ---- */
+
+        /* Create with a primitive type (sf::PrimitiveType — 0=Points,
+         * 1=Lines, 2=LineStrip, 3=Triangles, 4=TriangleStrip,
+         * 5=TriangleFan) and an initial vertex count. */
+        MTypeValue* nVertexArrayCreate(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_vertex_array_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            int primitive  = static_cast<int>(g_host->getInt(args[0]));
+            size_t initial = static_cast<size_t>(g_host->getInt(args[1]));
+            auto* va = new sf::VertexArray(static_cast<sf::PrimitiveType>(primitive), initial);
+            return g_host->makeInt(ctx, g_vertexArrays.insert(va));
+        }
+        MTypeValue* nVertexArrayDestroy(void*, MTypeContext* ctx,
+                                          const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_vertex_array_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_vertexArrays.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nVertexArrayResize(void*, MTypeContext* ctx,
+                                         const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_vertex_array_resize")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[0]));
+            if (!va) return g_host->makeVoid(ctx);
+            va->resize(static_cast<size_t>(g_host->getInt(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nVertexArraySize(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_vertex_array_size")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[0]));
+            return g_host->makeInt(ctx, va ? static_cast<int64_t>(va->getVertexCount()) : 0);
+        }
+        MTypeValue* nVertexArraySetPrimitive(void*, MTypeContext* ctx,
+                                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_vertex_array_set_primitive_type")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[0]));
+            if (!va) return g_host->makeVoid(ctx);
+            va->setPrimitiveType(static_cast<sf::PrimitiveType>(g_host->getInt(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        /* Set one vertex: index, position x/y, color r/g/b/a, texCoords u/v. */
+        MTypeValue* nVertexArraySetVertex(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 10, "__native__sfml_vertex_array_set_vertex")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[0]));
+            if (!va) return g_host->makeVoid(ctx);
+            size_t i = static_cast<size_t>(g_host->getInt(args[1]));
+            if (i >= va->getVertexCount()) return g_host->makeVoid(ctx);
+            auto& v = (*va)[i];
+            v.position  = {static_cast<float>(g_host->getFloat(args[2])),
+                            static_cast<float>(g_host->getFloat(args[3]))};
+            v.color     = sf::Color(
+                static_cast<std::uint8_t>(g_host->getInt(args[4])),
+                static_cast<std::uint8_t>(g_host->getInt(args[5])),
+                static_cast<std::uint8_t>(g_host->getInt(args[6])),
+                static_cast<std::uint8_t>(g_host->getInt(args[7])));
+            v.texCoords = {static_cast<float>(g_host->getFloat(args[8])),
+                            static_cast<float>(g_host->getFloat(args[9]))};
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowDrawVertexArray(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_draw_vertex_array")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[1]));
+            if (w && va) w->draw(*va);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowDrawVertexArrayTextured(void*, MTypeContext* ctx,
+                                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_window_draw_vertex_array_textured")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::VertexArray* va = g_vertexArrays.find(g_host->getInt(args[1]));
+            sf::Texture* tex    = g_textures.find(g_host->getInt(args[2]));
+            if (w && va) {
+                sf::RenderStates states;
+                states.texture = tex;
+                w->draw(*va, states);
+            }
+            return g_host->makeVoid(ctx);
+        }
+
+        /* ---- View (camera / transform) ---- */
+
+        MTypeValue* nViewCreate(void*, MTypeContext* ctx,
+                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 4, "__native__sfml_view_create")) {
+                return g_host->makeInt(ctx, 0);
+            }
+            sf::Vector2f center{static_cast<float>(g_host->getFloat(args[0])),
+                                 static_cast<float>(g_host->getFloat(args[1]))};
+            sf::Vector2f size  {static_cast<float>(g_host->getFloat(args[2])),
+                                 static_cast<float>(g_host->getFloat(args[3]))};
+            auto* v = new sf::View(center, size);
+            return g_host->makeInt(ctx, g_views.insert(v));
+        }
+        MTypeValue* nViewDestroy(void*, MTypeContext* ctx,
+                                   const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_view_destroy")) {
+                return g_host->makeVoid(ctx);
+            }
+            delete g_views.erase(g_host->getInt(args[0]));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewSetCenter(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_view_set_center")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->setCenter({static_cast<float>(g_host->getFloat(args[1])),
+                          static_cast<float>(g_host->getFloat(args[2]))});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewSetSize(void*, MTypeContext* ctx,
+                                   const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_view_set_size")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->setSize({static_cast<float>(g_host->getFloat(args[1])),
+                        static_cast<float>(g_host->getFloat(args[2]))});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewSetRotation(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_view_set_rotation")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->setRotation(sf::degrees(static_cast<float>(g_host->getFloat(args[1]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewMove(void*, MTypeContext* ctx,
+                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 3, "__native__sfml_view_move")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->move({static_cast<float>(g_host->getFloat(args[1])),
+                     static_cast<float>(g_host->getFloat(args[2]))});
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewZoom(void*, MTypeContext* ctx,
+                                const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_view_zoom")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->zoom(static_cast<float>(g_host->getFloat(args[1])));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nViewRotate(void*, MTypeContext* ctx,
+                                  const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_view_rotate")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::View* v = g_views.find(g_host->getInt(args[0]));
+            if (!v) return g_host->makeVoid(ctx);
+            v->rotate(sf::degrees(static_cast<float>(g_host->getFloat(args[1]))));
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowSetView(void*, MTypeContext* ctx,
+                                     const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__sfml_window_set_view")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            sf::View* v         = g_views.find(g_host->getInt(args[1]));
+            if (w && v) w->setView(*v);
+            return g_host->makeVoid(ctx);
+        }
+        MTypeValue* nWindowResetView(void*, MTypeContext* ctx,
+                                       const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_window_reset_view")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->setView(w->getDefaultView());
+            return g_host->makeVoid(ctx);
+        }
     }
 
     void registerGraphicsNatives(MTypeContext* ctx)
@@ -530,5 +756,27 @@ namespace mtypesfml
         reg("__native__sfml_text_set_character_size",  &nTextSetCharacterSize);
         reg("__native__sfml_text_set_fill_color",      &nTextSetFillColor);
         reg("__native__sfml_window_draw_text",         &nWindowDrawText);
+
+        /* VertexArray */
+        reg("__native__sfml_vertex_array_create",              &nVertexArrayCreate);
+        reg("__native__sfml_vertex_array_destroy",             &nVertexArrayDestroy);
+        reg("__native__sfml_vertex_array_resize",              &nVertexArrayResize);
+        reg("__native__sfml_vertex_array_size",                &nVertexArraySize);
+        reg("__native__sfml_vertex_array_set_primitive_type",  &nVertexArraySetPrimitive);
+        reg("__native__sfml_vertex_array_set_vertex",          &nVertexArraySetVertex);
+        reg("__native__sfml_window_draw_vertex_array",         &nWindowDrawVertexArray);
+        reg("__native__sfml_window_draw_vertex_array_textured",&nWindowDrawVertexArrayTextured);
+
+        /* View */
+        reg("__native__sfml_view_create",        &nViewCreate);
+        reg("__native__sfml_view_destroy",       &nViewDestroy);
+        reg("__native__sfml_view_set_center",    &nViewSetCenter);
+        reg("__native__sfml_view_set_size",      &nViewSetSize);
+        reg("__native__sfml_view_set_rotation",  &nViewSetRotation);
+        reg("__native__sfml_view_move",          &nViewMove);
+        reg("__native__sfml_view_zoom",          &nViewZoom);
+        reg("__native__sfml_view_rotate",        &nViewRotate);
+        reg("__native__sfml_window_set_view",    &nWindowSetView);
+        reg("__native__sfml_window_reset_view",  &nWindowResetView);
     }
 }

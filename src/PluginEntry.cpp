@@ -13,6 +13,8 @@ namespace mtypesfml
     HandleRegistry<sf::Text>           g_texts;
     HandleRegistry<sf::RectangleShape> g_rectShapes;
     HandleRegistry<sf::CircleShape>    g_circleShapes;
+    HandleRegistry<sf::VertexArray>    g_vertexArrays;
+    HandleRegistry<sf::View>           g_views;
 }
 
 extern "C" MTYPE_PLUGIN_EXPORT

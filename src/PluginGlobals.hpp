@@ -20,6 +20,8 @@ namespace sf
     class Text;
     class RectangleShape;
     class CircleShape;
+    class VertexArray;
+    class View;
 }
 
 namespace mtypesfml
@@ -33,6 +35,8 @@ namespace mtypesfml
     extern HandleRegistry<sf::Text>           g_texts;
     extern HandleRegistry<sf::RectangleShape> g_rectShapes;
     extern HandleRegistry<sf::CircleShape>    g_circleShapes;
+    extern HandleRegistry<sf::VertexArray>    g_vertexArrays;
+    extern HandleRegistry<sf::View>           g_views;
 
     void registerWindowNatives(MTypeContext* ctx);
     void registerGraphicsNatives(MTypeContext* ctx);

@@ -144,6 +144,84 @@ class Texts {
     }
 }
 
+// ----------------------------------------------------------------------
+// Phase 2 — VertexArray (procedural geometry) + View (camera).
+// ----------------------------------------------------------------------
+
+// sf::PrimitiveType values from SFML 3's enum class.
+class Primitive {
+    public static function points():        int { return 0; }
+    public static function lines():         int { return 1; }
+    public static function lineStrip():     int { return 2; }
+    public static function triangles():     int { return 3; }
+    public static function triangleStrip(): int { return 4; }
+    public static function triangleFan():   int { return 5; }
+}
+
+class VertexArray {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_vertex_array_destroy(this.handle); }
+
+    public function size(): int { return __native__sfml_vertex_array_size(this.handle); }
+    public function resize(int count): void {
+        __native__sfml_vertex_array_resize(this.handle, count);
+    }
+    public function setPrimitiveType(int primitive): void {
+        __native__sfml_vertex_array_set_primitive_type(this.handle, primitive);
+    }
+    // Write one vertex: (position x,y) + (color r,g,b,a) + (texCoord u,v).
+    public function setVertex(int index,
+                                float x, float y,
+                                int r, int g, int b, int a,
+                                float u, float v): void {
+        __native__sfml_vertex_array_set_vertex(this.handle, index, x, y, r, g, b, a, u, v);
+    }
+}
+
+class VertexArrays {
+    // Create with a sf::PrimitiveType (use Primitive::xxx()) and a
+    // pre-allocated vertex count. Resize later if needed.
+    public static function create(int primitive, int initialSize): VertexArray {
+        return new VertexArray(__native__sfml_vertex_array_create(primitive, initialSize));
+    }
+}
+
+class View {
+    public int handle;
+    public constructor(int h) { this.handle = h; }
+    public function destroy(): void { __native__sfml_view_destroy(this.handle); }
+
+    public function setCenter(float x, float y): void {
+        __native__sfml_view_set_center(this.handle, x, y);
+    }
+    public function setSize(float w, float h): void {
+        __native__sfml_view_set_size(this.handle, w, h);
+    }
+    public function setRotation(float degrees): void {
+        __native__sfml_view_set_rotation(this.handle, degrees);
+    }
+    public function move(float dx, float dy): void {
+        __native__sfml_view_move(this.handle, dx, dy);
+    }
+    // Multiply view size by `factor`. < 1 zooms in, > 1 zooms out.
+    public function zoom(float factor): void {
+        __native__sfml_view_zoom(this.handle, factor);
+    }
+    public function rotate(float degrees): void {
+        __native__sfml_view_rotate(this.handle, degrees);
+    }
+}
+
+class Views {
+    // Create a view with given center and size in world units. The view
+    // maps that world rect onto the entire window.
+    public static function create(float centerX, float centerY,
+                                    float sizeW,   float sizeH): View {
+        return new View(__native__sfml_view_create(centerX, centerY, sizeW, sizeH));
+    }
+}
+
 // Drawing primitives — passed the window's handle implicitly via this
 // helper class to keep the surface flat. Pattern:
 //   Draw::sprite(window, mySprite);
@@ -160,5 +238,23 @@ class Draw {
     }
     public static function text(RenderWindow w, Text t): void {
         __native__sfml_window_draw_text(w.handle, t.handle);
+    }
+    public static function vertexArray(RenderWindow w, VertexArray va): void {
+        __native__sfml_window_draw_vertex_array(w.handle, va.handle);
+    }
+    public static function vertexArrayTextured(RenderWindow w, VertexArray va,
+                                                  Texture tex): void {
+        __native__sfml_window_draw_vertex_array_textured(w.handle, va.handle, tex.handle);
+    }
+}
+
+// Camera helpers on the window itself — pair set/reset around a draw to
+// scope the transform to a subset of the frame.
+class Camera {
+    public static function setView(RenderWindow w, View v): void {
+        __native__sfml_window_set_view(w.handle, v.handle);
+    }
+    public static function resetView(RenderWindow w): void {
+        __native__sfml_window_reset_view(w.handle);
     }
 }
