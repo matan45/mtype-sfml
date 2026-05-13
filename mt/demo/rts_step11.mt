@@ -1,31 +1,41 @@
-// RTS step 10 — Barracks (second building) + Fog of War.
+// RTS step 11 — buildable Barracks + audio.
 //
-// Builds on rts_step9:
-//   * Two buildings now. The Town Hall (existing, brown) produces
-//     Workers; the Barracks (new, darker red-brown, placed east of
-//     the hall) produces Soldiers. Each building has its own queue
-//     and its own progress. Clicking a building selects it and opens
-//     its specific build menu.
-//   * Keyboard shortcuts: Space queues a Worker at the hall, B queues
-//     a Soldier at the barracks. Same costs, same upfront pay.
-//   * Fog of war on a 64x64 tile grid. Three states: UNEXPLORED
-//     (opaque black), EXPLORED (dim — you remember the terrain) and
-//     VISIBLE (clear — friendly units can currently see it).
-//   * Sight radii per entity (in tile-cells): Worker 5, Soldier 6,
-//     Hall 8, Barracks 7. Fog updates every frame.
-//   * Enemies only render in currently-VISIBLE cells. Nodes render
-//     in EXPLORED or VISIBLE (you remember them after seeing them
-//     once). The same rule applies to the minimap.
-//   * Save/load (F5/F9) now also captures both queues, both progress
-//     timers, and the explored-mask layer of the fog.
+// Builds on rts_step10:
+//   * The Barracks no longer starts on the map. The Town Hall's build
+//     menu now has a "Build Barracks" button next to "Worker". Click
+//     it, then left-click somewhere in the world to place. The cost
+//     (BARRACKS_BUILD_COST_*) is deducted at placement, and the
+//     barracks then "constructs" over BARRACKS_BUILD_TIME seconds
+//     before becoming functional.
+//   * During construction the barracks renders semi-transparent with
+//     a progress bar above it; it can't be selected and doesn't queue
+//     anything. Once complete, it works exactly like the auto-placed
+//     barracks in step 10.
+//   * Right-click during placement-mode cancels (no refund needed —
+//     resources only get spent on actual placement).
+//   * Audio: background music streams from MUSIC_PATH on loop (drop a
+//     file there to enable). Three sound effects play through Windows
+//     system .wav files: place, complete, click.
+//
+// Everything else from step 10 (worker FSM, soldier FSM, harvest loop,
+// crystal+wood, formations, separation grid, fog of war, minimap,
+// build queue, in-memory save/load) carries over unchanged.
 
 import * from "../lib/Sfml.mt";
 import * from "../lib/Graphics.mt";
 import * from "../lib/System.mt";
+import * from "../lib/Audio.mt";
 
 __plugin_load("mt/mtype_sfml.dll");
 
-string HUD_FONT_PATH = "C:/Windows/Fonts/arial.ttf";
+string HUD_FONT_PATH   = "C:/Windows/Fonts/arial.ttf";
+// Drop any OGG/WAV/FLAC SFML can read at this path to enable bg music.
+// If the file's missing the load returns an invalid handle and .play()
+// silently does nothing — the game still runs.
+string MUSIC_PATH      = "mt/demo/music.mp3";
+string SFX_PLACE_PATH  = "mt/demo/chord.wav";
+string SFX_COMPLETE_PATH = "mt/demo/tada.wav";
+string SFX_CLICK_PATH  = "mt/demo/ding.wav";
 
 // ---- world / window ----
 int   WIN_W      = 1280;
@@ -61,7 +71,7 @@ int   WORKER_HP_INIT = 25;
 int   WORKER_COST_CRYSTAL = 10;
 int   WORKER_COST_WOOD    = 5;
 float WORKER_BUILD_TIME = 2.5;
-float WORKER_SIGHT  = 5.0;       // in fog cells
+float WORKER_SIGHT  = 5.0;
 
 float SOLDIER_RADIUS = 13.0;
 float SOLDIER_SPEED  = 110.0;
@@ -76,11 +86,15 @@ float SOLDIER_SIGHT = 6.0;
 
 int QUEUE_MAX = 5;
 
-// ---- economy constants ----
+// ---- economy ----
 float HALL_HALF        = 36.0;
 float HALL_SIGHT       = 8.0;
 float BARRACKS_HALF    = 30.0;
 float BARRACKS_SIGHT   = 7.0;
+
+int   BARRACKS_BUILD_COST_CRYSTAL = 40;
+int   BARRACKS_BUILD_COST_WOOD    = 30;
+float BARRACKS_BUILD_TIME         = 8.0;
 
 float NODE_RADIUS      = 18.0;
 int   NODE_AMOUNT_INIT = 200;
@@ -92,7 +106,6 @@ int   HARVEST_AMOUNT   = 5;
 int RES_CRYSTAL = 0;
 int RES_WOOD    = 1;
 
-// ---- enemy constants ----
 int   ENEMY_HP_INIT = 60;
 float ENEMY_RADIUS  = 16.0;
 
@@ -111,6 +124,11 @@ int WS_HARVEST    = 2;
 int WS_TO_HALL    = 3;
 int SOL_TO_ENEMY  = 10;
 int SOL_ATTACKING = 11;
+
+// ---- Barracks build-state values ----
+int BB_NONE     = 0;     // not placed yet
+int BB_BUILDING = 1;     // placed, under construction
+int BB_DONE     = 2;     // fully functional
 
 // ---- data model ----
 class Unit {
@@ -181,7 +199,7 @@ function newSoldier(float x, float y): Unit {
     return new Unit(x, y, 1, 110.0, 13.0, 60);
 }
 
-// ---- helpers ----
+// ---- math helpers ----
 function sqrt(float v): float {
     if (v <= 0.0) { return 0.0; }
     float x = v;
@@ -232,9 +250,6 @@ function buildTimeOf(int type): float {
     return WORKER_BUILD_TIME;
 }
 
-// Reveal a circular area around (sx, sy) by setting matching fog cells
-// to VISIBLE. Mutates the int[] in place — the array reference is
-// passed in, the writes go through `fogArr[i] = ...`.
 function revealAround(int[] fogArr, float sx, float sy, float radius): void {
     float invCell = 1.0 / FOG_CELL;
     float sxC = sx * invCell;
@@ -259,7 +274,7 @@ function revealAround(int[] fogArr, float sx, float sy, float radius): void {
 }
 
 // ---- window + tilemap ----
-RenderWindow window = Sfml::createWindow("RTS — step 10", WIN_W, WIN_H);
+RenderWindow window = Sfml::createWindow("RTS — step 11", WIN_W, WIN_H);
 window.setFramerateLimit(144);
 
 int tileCount   = MAP_TILES * MAP_TILES;
@@ -297,8 +312,16 @@ View  cam     = Views::create(camX, camY, (float)WIN_W, (float)WIN_H);
 // ---- buildings ----
 float HALL_X = WORLD_W * 0.5;
 float HALL_Y = WORLD_H * 0.5;
-float BARRACKS_X = HALL_X + 200.0;
-float BARRACKS_Y = HALL_Y - 40.0;
+
+// Barracks starts unplaced. (BARRACKS_X/Y get set when placed.)
+int   barracksBuilt  = BB_NONE;
+float BARRACKS_X     = 0.0;
+float BARRACKS_Y     = 0.0;
+float barracksConstructionProg = 0.0;
+
+// Placement-mode flag: 1 while the player is choosing where to drop
+// the barracks. Toggled by clicking "Build Barracks" in the Hall menu.
+int placingBarracks = 0;
 
 // ---- resource nodes ----
 int NODE_COUNT = 9;
@@ -313,8 +336,9 @@ nodes[6] = new Node(HALL_X + 180.0, HALL_Y - 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 nodes[7] = new Node(HALL_X - 200.0, HALL_Y + 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 nodes[8] = new Node(HALL_X + 200.0, HALL_Y + 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 
-int crystalStockpile = 50;
-int woodStockpile    = 30;
+// More starter resources so the player can build a barracks early.
+int crystalStockpile = 70;
+int woodStockpile    = 50;
 
 // ---- enemies ----
 int ENEMY_COUNT = 4;
@@ -324,7 +348,7 @@ enemies[1] = new Enemy(HALL_X + 640.0, HALL_Y - 480.0, ENEMY_HP_INIT);
 enemies[2] = new Enemy(HALL_X + 600.0, HALL_Y + 520.0, ENEMY_HP_INIT);
 enemies[3] = new Enemy(HALL_X - 660.0, HALL_Y + 490.0, ENEMY_HP_INIT);
 
-// ---- unit pool ----
+// ---- unit pool. No soldiers seeded — you need the Barracks first. ----
 Unit[] units = new Unit[MAX_UNITS];
 int unitCount = 0;
 
@@ -337,13 +361,8 @@ for (int sy = 0; sy < 4; sy++) {
         unitCount = unitCount + 1;
     }
 }
-for (int sx = 0; sx < 4; sx++) {
-    units[unitCount] = newSoldier(seedX + (float)sx * 36.0,
-                                   seedY + 4.0 * 32.0 + 16.0);
-    unitCount = unitCount + 1;
-}
 
-// ---- build queues (one per building) ----
+// ---- build queues ----
 int[] hallQueue        = new int[QUEUE_MAX];
 int   hallQueueCount   = 0;
 float hallBuildProg    = 0.0;
@@ -351,18 +370,12 @@ int[] barracksQueue    = new int[QUEUE_MAX];
 int   barracksQueueCount = 0;
 float barracksBuildProg = 0.0;
 
-// ---- fog state ----
+// ---- fog ----
 int   fogCellCount = FOG_W * FOG_H;
-int[] fog     = new int[fogCellCount];   // current frame's per-cell state
-int[] fogPrev = new int[fogCellCount];   // previous frame's state — used
-                                          // to avoid rebuilding cells whose
-                                          // alpha hasn't changed.
-// fogPrev starts as 0 (UNEXPLORED) which matches the initial VA color;
-// fog also starts UNEXPLORED. The hall + barracks sight pass on frame
-// 0 promotes their surroundings to VISIBLE, which then differs from
-// fogPrev and triggers the per-cell VA rebuild for those cells only.
+int[] fog     = new int[fogCellCount];
+int[] fogPrev = new int[fogCellCount];
 
-// ---- save snapshot buffers ----
+// ---- snapshot buffers ----
 int   hasSnapshot      = 0;
 int   snapCrystal      = 0;
 int   snapWood         = 0;
@@ -388,18 +401,44 @@ int[]   snapUTargetEnemy = new int[MAX_UNITS];
 float[] snapUAttackT     = new float[MAX_UNITS];
 int[]   snapNodeAmount   = new int[NODE_COUNT];
 int[]   snapEnemyHp      = new int[ENEMY_COUNT];
+int     snapBarracksBuilt = 0;
+float   snapBarracksX = 0.0;
+float   snapBarracksY = 0.0;
+float   snapBarracksConstr = 0.0;
 int     snapHallQueueCnt = 0;
 int[]   snapHallQueue    = new int[QUEUE_MAX];
 float   snapHallBuildProg = 0.0;
 int     snapBarracksQueueCnt = 0;
 int[]   snapBarracksQueue = new int[QUEUE_MAX];
 float   snapBarracksBuildProg = 0.0;
-int[]   snapFog          = new int[fogCellCount];   // explored mask only
+int[]   snapFog          = new int[fogCellCount];
 
 // ---- spatial grid ----
 int   cellCount = SEP_GRID_W * SEP_GRID_H;
 int[] cellHead  = new int[cellCount];
 int[] cellNext  = new int[MAX_UNITS];
+
+// ---- audio ----
+//
+// Music streams from disk; sounds are loaded into memory. SFML 3 will
+// silently produce a no-op handle if any of these files don't exist,
+// so the game still runs without audio assets.
+Music bgMusic = MusicPlayer::open(MUSIC_PATH);
+bgMusic.setLoop(true);
+bgMusic.setVolume(28.0);
+bgMusic.play();
+
+SoundBuffer sfxPlaceBuf   = SoundBuffers::load(SFX_PLACE_PATH);
+Sound        sfxPlace     = Sounds::create(sfxPlaceBuf);
+sfxPlace.setVolume(60.0);
+
+SoundBuffer sfxCompleteBuf = SoundBuffers::load(SFX_COMPLETE_PATH);
+Sound        sfxComplete   = Sounds::create(sfxCompleteBuf);
+sfxComplete.setVolume(55.0);
+
+SoundBuffer sfxClickBuf = SoundBuffers::load(SFX_CLICK_PATH);
+Sound        sfxClick   = Sounds::create(sfxClickBuf);
+sfxClick.setVolume(40.0);
 
 // ---- world-space draw shapes ----
 CircleShape workerBody = Circles::create(WORKER_RADIUS);
@@ -467,46 +506,51 @@ hallSelectionRing.setFillColor(0, 0, 0, 0);
 hallSelectionRing.setOutlineColor(255, 230, 80, 230);
 hallSelectionRing.setOutlineThickness(3.0);
 
+// Two barracks shapes: full opacity for the done state, and a faded
+// variant for "under construction". Same size + outline.
 RectangleShape barracksShape = Rectangles::create(BARRACKS_HALF * 2.0,
                                                    BARRACKS_HALF * 2.0);
 barracksShape.setOrigin(BARRACKS_HALF, BARRACKS_HALF);
-barracksShape.setPosition(BARRACKS_X, BARRACKS_Y);
 barracksShape.setFillColor(120, 60, 50, 255);
 barracksShape.setOutlineColor(40, 15, 10, 255);
 barracksShape.setOutlineThickness(3.0);
 
+RectangleShape barracksConstructShape = Rectangles::create(BARRACKS_HALF * 2.0,
+                                                            BARRACKS_HALF * 2.0);
+barracksConstructShape.setOrigin(BARRACKS_HALF, BARRACKS_HALF);
+barracksConstructShape.setFillColor(120, 60, 50, 130);
+barracksConstructShape.setOutlineColor(200, 180, 100, 220);
+barracksConstructShape.setOutlineThickness(2.0);
+
 RectangleShape barracksSelectionRing = Rectangles::create(BARRACKS_HALF * 2.0 + 10.0,
                                                            BARRACKS_HALF * 2.0 + 10.0);
 barracksSelectionRing.setOrigin(BARRACKS_HALF + 5.0, BARRACKS_HALF + 5.0);
-barracksSelectionRing.setPosition(BARRACKS_X, BARRACKS_Y);
 barracksSelectionRing.setFillColor(0, 0, 0, 0);
 barracksSelectionRing.setOutlineColor(255, 230, 80, 230);
 barracksSelectionRing.setOutlineThickness(3.0);
+
+// Placement-mode "ghost": semi-transparent outline that follows the
+// mouse while choosing where to drop the barracks.
+RectangleShape barracksGhost = Rectangles::create(BARRACKS_HALF * 2.0,
+                                                   BARRACKS_HALF * 2.0);
+barracksGhost.setOrigin(BARRACKS_HALF, BARRACKS_HALF);
+barracksGhost.setFillColor(120, 60, 50, 90);
+barracksGhost.setOutlineColor(255, 240, 180, 220);
+barracksGhost.setOutlineThickness(2.0);
+
+// Construction progress bar above the barracks while it's being built.
+RectangleShape constructBarBg = Rectangles::create(56.0, 8.0);
+constructBarBg.setFillColor(20, 20, 20, 230);
+constructBarBg.setOutlineColor(0, 0, 0, 255);
+constructBarBg.setOutlineThickness(1.0);
+
+RectangleShape constructBarFg = Rectangles::create(54.0, 6.0);
+constructBarFg.setFillColor(240, 220, 100, 255);
 
 RectangleShape selBox = Rectangles::create(1.0, 1.0);
 selBox.setFillColor(80, 180, 255, 40);
 selBox.setOutlineColor(140, 220, 255, 220);
 selBox.setOutlineThickness(1.0);
-
-// ---- fog VA (one big triangle list, alpha updated per-cell on change) ----
-int fogVertexCount = fogCellCount * 6;
-VertexArray fogVA = VertexArrays::create(Primitive::triangles(), fogVertexCount);
-for (int gy = 0; gy < FOG_H; gy++) {
-    for (int gx = 0; gx < FOG_W; gx++) {
-        float x0 = (float)gx * FOG_CELL;
-        float y0 = (float)gy * FOG_CELL;
-        float x1 = x0 + FOG_CELL;
-        float y1 = y0 + FOG_CELL;
-        int idx = (gy * FOG_W + gx) * 6;
-        int a = 230;   // initial unexplored alpha
-        fogVA.setVertex(idx + 0, x0, y0, 0, 0, 0, a, 0.0, 0.0);
-        fogVA.setVertex(idx + 1, x1, y0, 0, 0, 0, a, 0.0, 0.0);
-        fogVA.setVertex(idx + 2, x1, y1, 0, 0, 0, a, 0.0, 0.0);
-        fogVA.setVertex(idx + 3, x0, y0, 0, 0, 0, a, 0.0, 0.0);
-        fogVA.setVertex(idx + 4, x1, y1, 0, 0, 0, a, 0.0, 0.0);
-        fogVA.setVertex(idx + 5, x0, y1, 0, 0, 0, a, 0.0, 0.0);
-    }
-}
 
 // ---- HUD ----
 Font hudFont = Fonts::load(HUD_FONT_PATH);
@@ -558,25 +602,32 @@ txtFps.setFillColor(170, 180, 200, 255);
 txtFps.setPosition(22.0, 144.0);
 
 Text txtHint = Texts::create(hudFont,
-    "L-click hall/barracks: build   F5: save   F9: load   Esc: quit",
+    "L-click hall: build menu   Build Barracks: pick spot   F5/F9: save/load   Esc: quit",
     13);
 txtHint.setFillColor(180, 180, 190, 220);
 txtHint.setPosition(10.0, (float)WIN_H - 22.0);
 
-Text toastTxt = Texts::create(hudFont, "", 22);
-toastTxt.setFillColor(255, 240, 160, 255);
-string toastMsg  = "";
-float  toastTimer = 0.0;
+// Top-center banner used for placement-mode prompt + save/load toast.
+Text bannerTxt = Texts::create(hudFont, "", 22);
+bannerTxt.setFillColor(255, 240, 160, 255);
+string bannerMsg  = "";
+float  bannerTimer = 0.0;     // 0 = hidden, >0 = timed toast,
+                              // <0 = persistent (used for placement)
 
-// ---- build menu (used for both buildings; content swaps) ----
+// ---- build menu ----
 float BM_W   = 400.0;
 float BM_H   = 130.0;
 float bmX    = (float)WIN_W * 0.5 - BM_W * 0.5;
 float bmY    = (float)WIN_H - 32.0 - BM_H;
 float BTN_W  = 150.0;
 float BTN_H  = 50.0;
-float btn0X  = bmX + (BM_W - BTN_W) * 0.5;     // centered button
-float btn0Y  = bmY + 12.0;
+
+// Hall menu can show two buttons (Worker + Build Barracks) side by side;
+// the barracks menu has just one centered button (Soldier).
+float btnLeftX   = bmX + 16.0;
+float btnRightX  = bmX + BM_W - BTN_W - 16.0;
+float btnCenterX = bmX + (BM_W - BTN_W) * 0.5;
+float btnRowY    = bmY + 12.0;
 
 float QSLOT_W   = 42.0;
 float QSLOT_H   = 36.0;
@@ -599,6 +650,11 @@ btnSoldierBg.setFillColor(110, 40, 40, 220);
 btnSoldierBg.setOutlineColor(230, 150, 150, 220);
 btnSoldierBg.setOutlineThickness(1.0);
 
+RectangleShape btnBuildBarracksBg = Rectangles::create(BTN_W, BTN_H);
+btnBuildBarracksBg.setFillColor(90, 60, 40, 220);
+btnBuildBarracksBg.setOutlineColor(220, 180, 130, 220);
+btnBuildBarracksBg.setOutlineThickness(1.0);
+
 Text btnWorkerLabel = Texts::create(hudFont, "Worker", 17);
 btnWorkerLabel.setFillColor(230, 250, 230, 255);
 Text btnWorkerCost  = Texts::create(hudFont,
@@ -610,6 +666,12 @@ btnSoldierLabel.setFillColor(250, 230, 230, 255);
 Text btnSoldierCost  = Texts::create(hudFont,
     "" + SOLDIER_COST_CRYSTAL + "C  " + SOLDIER_COST_WOOD + "W", 12);
 btnSoldierCost.setFillColor(230, 190, 190, 255);
+
+Text btnBarracksLabel = Texts::create(hudFont, "Build Barracks", 16);
+btnBarracksLabel.setFillColor(250, 240, 220, 255);
+Text btnBarracksCost  = Texts::create(hudFont,
+    "" + BARRACKS_BUILD_COST_CRYSTAL + "C  " + BARRACKS_BUILD_COST_WOOD + "W", 12);
+btnBarracksCost.setFillColor(230, 210, 180, 255);
 
 Text txtQueueLabel = Texts::create(hudFont, "Queue:", 13);
 txtQueueLabel.setFillColor(200, 200, 215, 230);
@@ -683,6 +745,26 @@ mmViewport.setFillColor(0, 0, 0, 0);
 mmViewport.setOutlineColor(255, 255, 255, 200);
 mmViewport.setOutlineThickness(1.0);
 
+// ---- fog VA ----
+int fogVertexCount = fogCellCount * 6;
+VertexArray fogVA = VertexArrays::create(Primitive::triangles(), fogVertexCount);
+for (int gy = 0; gy < FOG_H; gy++) {
+    for (int gx = 0; gx < FOG_W; gx++) {
+        float x0 = (float)gx * FOG_CELL;
+        float y0 = (float)gy * FOG_CELL;
+        float x1 = x0 + FOG_CELL;
+        float y1 = y0 + FOG_CELL;
+        int idx = (gy * FOG_W + gx) * 6;
+        int a = 230;
+        fogVA.setVertex(idx + 0, x0, y0, 0, 0, 0, a, 0.0, 0.0);
+        fogVA.setVertex(idx + 1, x1, y0, 0, 0, 0, a, 0.0, 0.0);
+        fogVA.setVertex(idx + 2, x1, y1, 0, 0, 0, a, 0.0, 0.0);
+        fogVA.setVertex(idx + 3, x0, y0, 0, 0, 0, a, 0.0, 0.0);
+        fogVA.setVertex(idx + 4, x1, y1, 0, 0, 0, a, 0.0, 0.0);
+        fogVA.setVertex(idx + 5, x0, y1, 0, 0, 0, a, 0.0, 0.0);
+    }
+}
+
 // ---- selection / interaction state ----
 int   hallSelected     = 0;
 int   barracksSelected = 0;
@@ -754,7 +836,15 @@ while (window.isOpen()) {
         if (ev == evClosed) {
             window.close();
         } else if (ev == evKeyDown) {
-            if (Event::key() == kEsc) { window.close(); }
+            if (Event::key() == kEsc) {
+                if (placingBarracks == 1) {
+                    placingBarracks = 0;
+                    bannerMsg = "";
+                    bannerTimer = 0.0;
+                } else {
+                    window.close();
+                }
+            }
         } else if (ev == evMouseDn) {
             int mb = Event::mouseButton();
             if (mb == mbLeft) {
@@ -762,29 +852,89 @@ while (window.isOpen()) {
                 float mye = (float)Event::mouseY();
                 int consumed = 0;
 
-                if (hallSelected == 1) {
-                    if (inRect(mxe, mye, btn0X, btn0Y, BTN_W, BTN_H) == 1) {
-                        if (crystalStockpile >= WORKER_COST_CRYSTAL
-                                && woodStockpile >= WORKER_COST_WOOD
-                                && hallQueueCount < QUEUE_MAX) {
-                            hallQueue[hallQueueCount] = UT_WORKER;
-                            hallQueueCount = hallQueueCount + 1;
-                            crystalStockpile = crystalStockpile - WORKER_COST_CRYSTAL;
-                            woodStockpile    = woodStockpile - WORKER_COST_WOOD;
-                        }
-                        consumed = 1;
+                // Placement mode owns left-click until cancelled or
+                // satisfied. Translate to world, drop the barracks.
+                if (placingBarracks == 1) {
+                    float sw = (float)WIN_W * camZoom;
+                    float sh = (float)WIN_H * camZoom;
+                    float[] w = Coords::screenToWorld(mxe, mye,
+                                                        camX, camY, sw, sh,
+                                                        (float)WIN_W, (float)WIN_H);
+                    float wx = w[0];
+                    float wy = w[1];
+
+                    // Cheap validity check: don't overlap the hall.
+                    float dx = wx - HALL_X;
+                    float dy = wy - HALL_Y;
+                    float minDist = HALL_HALF + BARRACKS_HALF + 8.0;
+                    int valid = 1;
+                    if (dx < 0.0) { dx = -dx; }
+                    if (dy < 0.0) { dy = -dy; }
+                    if (dx < minDist && dy < minDist) { valid = 0; }
+                    // Also stay inside the world bounds.
+                    if (wx < BARRACKS_HALF || wx > WORLD_W - BARRACKS_HALF
+                            || wy < BARRACKS_HALF || wy > WORLD_H - BARRACKS_HALF) {
+                        valid = 0;
                     }
-                } else if (barracksSelected == 1) {
-                    if (inRect(mxe, mye, btn0X, btn0Y, BTN_W, BTN_H) == 1) {
-                        if (crystalStockpile >= SOLDIER_COST_CRYSTAL
-                                && woodStockpile >= SOLDIER_COST_WOOD
-                                && barracksQueueCount < QUEUE_MAX) {
-                            barracksQueue[barracksQueueCount] = UT_SOLDIER;
-                            barracksQueueCount = barracksQueueCount + 1;
-                            crystalStockpile = crystalStockpile - SOLDIER_COST_CRYSTAL;
-                            woodStockpile    = woodStockpile - SOLDIER_COST_WOOD;
+
+                    if (valid == 1
+                            && crystalStockpile >= BARRACKS_BUILD_COST_CRYSTAL
+                            && woodStockpile    >= BARRACKS_BUILD_COST_WOOD) {
+                        BARRACKS_X = wx;
+                        BARRACKS_Y = wy;
+                        barracksBuilt = BB_BUILDING;
+                        barracksConstructionProg = 0.0;
+                        crystalStockpile = crystalStockpile - BARRACKS_BUILD_COST_CRYSTAL;
+                        woodStockpile    = woodStockpile - BARRACKS_BUILD_COST_WOOD;
+                        placingBarracks = 0;
+                        bannerMsg = "";
+                        bannerTimer = 0.0;
+                        sfxPlace.play();
+                    }
+                    consumed = 1;
+                }
+
+                if (consumed == 0) {
+                    if (hallSelected == 1) {
+                        // Worker button (left if Build Barracks
+                        // button is showing, otherwise centered).
+                        float wbX = btnLeftX;
+                        if (barracksBuilt != BB_NONE) { wbX = btnCenterX; }
+                        if (inRect(mxe, mye, wbX, btnRowY, BTN_W, BTN_H) == 1) {
+                            if (crystalStockpile >= WORKER_COST_CRYSTAL
+                                    && woodStockpile >= WORKER_COST_WOOD
+                                    && hallQueueCount < QUEUE_MAX) {
+                                hallQueue[hallQueueCount] = UT_WORKER;
+                                hallQueueCount = hallQueueCount + 1;
+                                crystalStockpile = crystalStockpile - WORKER_COST_CRYSTAL;
+                                woodStockpile    = woodStockpile - WORKER_COST_WOOD;
+                                sfxClick.play();
+                            }
+                            consumed = 1;
+                        } else if (barracksBuilt == BB_NONE
+                                && inRect(mxe, mye, btnRightX, btnRowY, BTN_W, BTN_H) == 1) {
+                            if (crystalStockpile >= BARRACKS_BUILD_COST_CRYSTAL
+                                    && woodStockpile >= BARRACKS_BUILD_COST_WOOD) {
+                                placingBarracks = 1;
+                                bannerMsg = "Click on the map to place the Barracks (Esc/Right-click to cancel)";
+                                bannerTimer = -1.0;
+                                sfxClick.play();
+                            }
+                            consumed = 1;
                         }
-                        consumed = 1;
+                    } else if (barracksSelected == 1 && barracksBuilt == BB_DONE) {
+                        if (inRect(mxe, mye, btnCenterX, btnRowY, BTN_W, BTN_H) == 1) {
+                            if (crystalStockpile >= SOLDIER_COST_CRYSTAL
+                                    && woodStockpile >= SOLDIER_COST_WOOD
+                                    && barracksQueueCount < QUEUE_MAX) {
+                                barracksQueue[barracksQueueCount] = UT_SOLDIER;
+                                barracksQueueCount = barracksQueueCount + 1;
+                                crystalStockpile = crystalStockpile - SOLDIER_COST_CRYSTAL;
+                                woodStockpile    = woodStockpile - SOLDIER_COST_WOOD;
+                                sfxClick.play();
+                            }
+                            consumed = 1;
+                        }
                     }
                 }
 
@@ -796,184 +946,189 @@ while (window.isOpen()) {
                     selEndY = selStartY;
                 }
             } else if (mb == mbRight) {
-                float mxe = (float)Event::mouseX();
-                float mye = (float)Event::mouseY();
-                int rConsumed = 0;
+                // Right-click cancels placement mode without
+                // spending anything.
+                if (placingBarracks == 1) {
+                    placingBarracks = 0;
+                    bannerMsg = "";
+                    bannerTimer = 0.0;
+                } else {
+                    float mxe = (float)Event::mouseX();
+                    float mye = (float)Event::mouseY();
+                    int rConsumed = 0;
 
-                // Cancel + refund from whichever building is open.
-                if (hallSelected == 1) {
-                    for (int q = 0; q < hallQueueCount; q++) {
-                        float qx = qSlot0X + (float)q * (QSLOT_W + QSLOT_GAP);
-                        if (inRect(mxe, mye, qx, qSlotY, QSLOT_W, QSLOT_H) == 1) {
-                            int t = hallQueue[q];
-                            crystalStockpile = crystalStockpile + costCrystalOf(t);
-                            woodStockpile    = woodStockpile + costWoodOf(t);
-                            for (int s = q; s < hallQueueCount - 1; s++) {
-                                hallQueue[s] = hallQueue[s + 1];
-                            }
-                            hallQueueCount = hallQueueCount - 1;
-                            if (q == 0) { hallBuildProg = 0.0; }
-                            rConsumed = 1;
-                            break;
-                        }
-                    }
-                } else if (barracksSelected == 1) {
-                    for (int q = 0; q < barracksQueueCount; q++) {
-                        float qx = qSlot0X + (float)q * (QSLOT_W + QSLOT_GAP);
-                        if (inRect(mxe, mye, qx, qSlotY, QSLOT_W, QSLOT_H) == 1) {
-                            int t = barracksQueue[q];
-                            crystalStockpile = crystalStockpile + costCrystalOf(t);
-                            woodStockpile    = woodStockpile + costWoodOf(t);
-                            for (int s = q; s < barracksQueueCount - 1; s++) {
-                                barracksQueue[s] = barracksQueue[s + 1];
-                            }
-                            barracksQueueCount = barracksQueueCount - 1;
-                            if (q == 0) { barracksBuildProg = 0.0; }
-                            rConsumed = 1;
-                            break;
-                        }
-                    }
-                }
-
-                if (rConsumed == 0) {
-                    float sw = (float)WIN_W * camZoom;
-                    float sh = (float)WIN_H * camZoom;
-                    float[] w = Coords::screenToWorld((float)Event::mouseX(),
-                                                        (float)Event::mouseY(),
-                                                        camX, camY, sw, sh,
-                                                        (float)WIN_W, (float)WIN_H);
-                    float wx = w[0];
-                    float wy = w[1];
-
-                    int hitEnemy = -1;
-                    float enR2 = (ENEMY_RADIUS + SOLDIER_RADIUS) * (ENEMY_RADIUS + SOLDIER_RADIUS);
-                    for (int e = 0; e < ENEMY_COUNT; e++) {
-                        if (enemies[e].hp > 0) {
-                            // Only target visible enemies — can't
-                            // attack what you can't see.
-                            int cellX = (int)(enemies[e].x / FOG_CELL);
-                            int cellY = (int)(enemies[e].y / FOG_CELL);
-                            int vis = 0;
-                            if (cellX >= 0 && cellY >= 0
-                                    && cellX < FOG_W && cellY < FOG_H) {
-                                if (fog[cellY * FOG_W + cellX] == FOG_VISIBLE) {
-                                    vis = 1;
+                    if (hallSelected == 1) {
+                        for (int q = 0; q < hallQueueCount; q++) {
+                            float qx = qSlot0X + (float)q * (QSLOT_W + QSLOT_GAP);
+                            if (inRect(mxe, mye, qx, qSlotY, QSLOT_W, QSLOT_H) == 1) {
+                                int t = hallQueue[q];
+                                crystalStockpile = crystalStockpile + costCrystalOf(t);
+                                woodStockpile    = woodStockpile + costWoodOf(t);
+                                for (int s = q; s < hallQueueCount - 1; s++) {
+                                    hallQueue[s] = hallQueue[s + 1];
                                 }
-                            }
-                            if (vis == 1) {
-                                float dx = enemies[e].x - wx;
-                                float dy = enemies[e].y - wy;
-                                if (dx * dx + dy * dy <= enR2) { hitEnemy = e; }
+                                hallQueueCount = hallQueueCount - 1;
+                                if (q == 0) { hallBuildProg = 0.0; }
+                                rConsumed = 1;
+                                break;
                             }
                         }
-                    }
-                    int hitNode = -1;
-                    if (hitEnemy < 0) {
-                        float ndR2 = (NODE_RADIUS + WORKER_RADIUS) * (NODE_RADIUS + WORKER_RADIUS);
-                        for (int k = 0; k < NODE_COUNT; k++) {
-                            if (nodes[k].amount > 0) {
-                                float dx = nodes[k].x - wx;
-                                float dy = nodes[k].y - wy;
-                                if (dx * dx + dy * dy <= ndR2) { hitNode = k; }
+                    } else if (barracksSelected == 1 && barracksBuilt == BB_DONE) {
+                        for (int q = 0; q < barracksQueueCount; q++) {
+                            float qx = qSlot0X + (float)q * (QSLOT_W + QSLOT_GAP);
+                            if (inRect(mxe, mye, qx, qSlotY, QSLOT_W, QSLOT_H) == 1) {
+                                int t = barracksQueue[q];
+                                crystalStockpile = crystalStockpile + costCrystalOf(t);
+                                woodStockpile    = woodStockpile + costWoodOf(t);
+                                for (int s = q; s < barracksQueueCount - 1; s++) {
+                                    barracksQueue[s] = barracksQueue[s + 1];
+                                }
+                                barracksQueueCount = barracksQueueCount - 1;
+                                if (q == 0) { barracksBuildProg = 0.0; }
+                                rConsumed = 1;
+                                break;
                             }
                         }
                     }
 
-                    if (hitEnemy >= 0) {
-                        for (int i = 0; i < unitCount; i++) {
-                            if (units[i].selected == 1 && units[i].type == UT_SOLDIER) {
-                                units[i].targetEnemy = hitEnemy;
-                                units[i].state = SOL_TO_ENEMY;
-                                units[i].tx = enemies[hitEnemy].x;
-                                units[i].ty = enemies[hitEnemy].y;
-                                units[i].hasTarget = 1;
-                            }
-                        }
-                        int wkCount = 0;
-                        for (int i = 0; i < unitCount; i++) {
-                            if (units[i].selected == 1 && units[i].type == UT_WORKER) {
-                                wkCount = wkCount + 1;
-                            }
-                        }
-                        if (wkCount > 0) {
-                            int side = isqrtCeil(wkCount);
-                            float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
-                            float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
-                            int slot = 0;
-                            for (int i = 0; i < unitCount; i++) {
-                                if (units[i].selected == 1 && units[i].type == UT_WORKER) {
-                                    int sx = slot % side;
-                                    int sy = slot / side;
-                                    units[i].state = WS_IDLE;
-                                    units[i].assignedNode = -1;
-                                    units[i].tx = ox + (float)sx * FORM_SPACING;
-                                    units[i].ty = oy + (float)sy * FORM_SPACING;
-                                    units[i].hasTarget = 1;
-                                    slot = slot + 1;
+                    if (rConsumed == 0) {
+                        float sw = (float)WIN_W * camZoom;
+                        float sh = (float)WIN_H * camZoom;
+                        float[] w = Coords::screenToWorld((float)Event::mouseX(),
+                                                            (float)Event::mouseY(),
+                                                            camX, camY, sw, sh,
+                                                            (float)WIN_W, (float)WIN_H);
+                        float wx = w[0];
+                        float wy = w[1];
+
+                        int hitEnemy = -1;
+                        float enR2 = (ENEMY_RADIUS + SOLDIER_RADIUS) * (ENEMY_RADIUS + SOLDIER_RADIUS);
+                        for (int e = 0; e < ENEMY_COUNT; e++) {
+                            if (enemies[e].hp > 0) {
+                                int cellX = (int)(enemies[e].x / FOG_CELL);
+                                int cellY = (int)(enemies[e].y / FOG_CELL);
+                                int vis = 0;
+                                if (cellX >= 0 && cellY >= 0
+                                        && cellX < FOG_W && cellY < FOG_H) {
+                                    if (fog[cellY * FOG_W + cellX] == FOG_VISIBLE) {
+                                        vis = 1;
+                                    }
+                                }
+                                if (vis == 1) {
+                                    float dx = enemies[e].x - wx;
+                                    float dy = enemies[e].y - wy;
+                                    if (dx * dx + dy * dy <= enR2) { hitEnemy = e; }
                                 }
                             }
                         }
-                    } else if (hitNode >= 0) {
-                        for (int i = 0; i < unitCount; i++) {
-                            if (units[i].selected == 1 && units[i].type == UT_WORKER) {
-                                units[i].assignedNode = hitNode;
-                                if (units[i].cargo > 0) {
-                                    units[i].state = WS_TO_HALL;
-                                    units[i].tx = HALL_X;
-                                    units[i].ty = HALL_Y;
-                                } else {
-                                    units[i].state = WS_TO_RES;
-                                    units[i].tx = nodes[hitNode].x;
-                                    units[i].ty = nodes[hitNode].y;
+                        int hitNode = -1;
+                        if (hitEnemy < 0) {
+                            float ndR2 = (NODE_RADIUS + WORKER_RADIUS) * (NODE_RADIUS + WORKER_RADIUS);
+                            for (int k = 0; k < NODE_COUNT; k++) {
+                                if (nodes[k].amount > 0) {
+                                    float dx = nodes[k].x - wx;
+                                    float dy = nodes[k].y - wy;
+                                    if (dx * dx + dy * dy <= ndR2) { hitNode = k; }
                                 }
-                                units[i].hasTarget = 1;
                             }
                         }
-                        int solCount = 0;
-                        for (int i = 0; i < unitCount; i++) {
-                            if (units[i].selected == 1 && units[i].type == UT_SOLDIER) {
-                                solCount = solCount + 1;
-                            }
-                        }
-                        if (solCount > 0) {
-                            int side = isqrtCeil(solCount);
-                            float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
-                            float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
-                            int slot = 0;
+
+                        if (hitEnemy >= 0) {
                             for (int i = 0; i < unitCount; i++) {
                                 if (units[i].selected == 1 && units[i].type == UT_SOLDIER) {
-                                    int sx = slot % side;
-                                    int sy = slot / side;
-                                    units[i].state = WS_IDLE;
-                                    units[i].targetEnemy = -1;
-                                    units[i].tx = ox + (float)sx * FORM_SPACING;
-                                    units[i].ty = oy + (float)sy * FORM_SPACING;
+                                    units[i].targetEnemy = hitEnemy;
+                                    units[i].state = SOL_TO_ENEMY;
+                                    units[i].tx = enemies[hitEnemy].x;
+                                    units[i].ty = enemies[hitEnemy].y;
                                     units[i].hasTarget = 1;
-                                    slot = slot + 1;
                                 }
                             }
-                        }
-                    } else {
-                        int selCount = 0;
-                        for (int i = 0; i < unitCount; i++) {
-                            if (units[i].selected == 1) { selCount = selCount + 1; }
-                        }
-                        if (selCount > 0) {
-                            int side = isqrtCeil(selCount);
-                            float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
-                            float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
-                            int slot = 0;
+                            int wkCount = 0;
                             for (int i = 0; i < unitCount; i++) {
-                                if (units[i].selected == 1) {
-                                    int sx = slot % side;
-                                    int sy = slot / side;
-                                    units[i].state = WS_IDLE;
-                                    units[i].assignedNode = -1;
-                                    units[i].targetEnemy = -1;
-                                    units[i].tx = ox + (float)sx * FORM_SPACING;
-                                    units[i].ty = oy + (float)sy * FORM_SPACING;
+                                if (units[i].selected == 1 && units[i].type == UT_WORKER) {
+                                    wkCount = wkCount + 1;
+                                }
+                            }
+                            if (wkCount > 0) {
+                                int side = isqrtCeil(wkCount);
+                                float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
+                                float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
+                                int slot = 0;
+                                for (int i = 0; i < unitCount; i++) {
+                                    if (units[i].selected == 1 && units[i].type == UT_WORKER) {
+                                        int sx = slot % side;
+                                        int sy = slot / side;
+                                        units[i].state = WS_IDLE;
+                                        units[i].assignedNode = -1;
+                                        units[i].tx = ox + (float)sx * FORM_SPACING;
+                                        units[i].ty = oy + (float)sy * FORM_SPACING;
+                                        units[i].hasTarget = 1;
+                                        slot = slot + 1;
+                                    }
+                                }
+                            }
+                        } else if (hitNode >= 0) {
+                            for (int i = 0; i < unitCount; i++) {
+                                if (units[i].selected == 1 && units[i].type == UT_WORKER) {
+                                    units[i].assignedNode = hitNode;
+                                    if (units[i].cargo > 0) {
+                                        units[i].state = WS_TO_HALL;
+                                        units[i].tx = HALL_X;
+                                        units[i].ty = HALL_Y;
+                                    } else {
+                                        units[i].state = WS_TO_RES;
+                                        units[i].tx = nodes[hitNode].x;
+                                        units[i].ty = nodes[hitNode].y;
+                                    }
                                     units[i].hasTarget = 1;
-                                    slot = slot + 1;
+                                }
+                            }
+                            int solCount = 0;
+                            for (int i = 0; i < unitCount; i++) {
+                                if (units[i].selected == 1 && units[i].type == UT_SOLDIER) {
+                                    solCount = solCount + 1;
+                                }
+                            }
+                            if (solCount > 0) {
+                                int side = isqrtCeil(solCount);
+                                float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
+                                float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
+                                int slot = 0;
+                                for (int i = 0; i < unitCount; i++) {
+                                    if (units[i].selected == 1 && units[i].type == UT_SOLDIER) {
+                                        int sx = slot % side;
+                                        int sy = slot / side;
+                                        units[i].state = WS_IDLE;
+                                        units[i].targetEnemy = -1;
+                                        units[i].tx = ox + (float)sx * FORM_SPACING;
+                                        units[i].ty = oy + (float)sy * FORM_SPACING;
+                                        units[i].hasTarget = 1;
+                                        slot = slot + 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            int selCount = 0;
+                            for (int i = 0; i < unitCount; i++) {
+                                if (units[i].selected == 1) { selCount = selCount + 1; }
+                            }
+                            if (selCount > 0) {
+                                int side = isqrtCeil(selCount);
+                                float ox = wx - (float)(side - 1) * FORM_SPACING * 0.5;
+                                float oy = wy - (float)(side - 1) * FORM_SPACING * 0.5;
+                                int slot = 0;
+                                for (int i = 0; i < unitCount; i++) {
+                                    if (units[i].selected == 1) {
+                                        int sx = slot % side;
+                                        int sy = slot / side;
+                                        units[i].state = WS_IDLE;
+                                        units[i].assignedNode = -1;
+                                        units[i].targetEnemy = -1;
+                                        units[i].tx = ox + (float)sx * FORM_SPACING;
+                                        units[i].ty = oy + (float)sy * FORM_SPACING;
+                                        units[i].hasTarget = 1;
+                                        slot = slot + 1;
+                                    }
                                 }
                             }
                         }
@@ -1009,7 +1164,8 @@ while (window.isOpen()) {
                     if (cx >= HALL_X - HALL_HALF && cx <= HALL_X + HALL_HALF
                             && cy >= HALL_Y - HALL_HALF && cy <= HALL_Y + HALL_HALF) {
                         hitHall = 1;
-                    } else if (cx >= BARRACKS_X - BARRACKS_HALF
+                    } else if (barracksBuilt == BB_DONE
+                            && cx >= BARRACKS_X - BARRACKS_HALF
                             && cx <= BARRACKS_X + BARRACKS_HALF
                             && cy >= BARRACKS_Y - BARRACKS_HALF
                             && cy <= BARRACKS_Y + BARRACKS_HALF) {
@@ -1064,8 +1220,10 @@ while (window.isOpen()) {
             mmBg.setPosition(mmX, mmY);
             bmX = (float)WIN_W * 0.5 - BM_W * 0.5;
             bmY = (float)WIN_H - 32.0 - BM_H;
-            btn0X = bmX + (BM_W - BTN_W) * 0.5;
-            btn0Y = bmY + 12.0;
+            btnLeftX   = bmX + 16.0;
+            btnRightX  = bmX + BM_W - BTN_W - 16.0;
+            btnCenterX = bmX + (BM_W - BTN_W) * 0.5;
+            btnRowY    = bmY + 12.0;
             qSlot0X = bmX + (BM_W - (QSLOT_W * 5.0 + QSLOT_GAP * 4.0)) * 0.5;
             qSlotY  = bmY + 78.0;
         }
@@ -1105,7 +1263,6 @@ while (window.isOpen()) {
     if (camZoom < ZOOM_MIN) { camZoom = ZOOM_MIN; }
     if (camZoom > ZOOM_MAX) { camZoom = ZOOM_MAX; }
 
-    // Space queues a Worker at the Hall.
     int spaceNow = 0;
     if (Keyboard::isKeyPressed(kSpace)) { spaceNow = 1; }
     if (spaceNow == 1 && spaceLatch == 0
@@ -1119,10 +1276,10 @@ while (window.isOpen()) {
     }
     spaceLatch = spaceNow;
 
-    // B queues a Soldier at the Barracks.
     int bNow = 0;
     if (Keyboard::isKeyPressed(kB)) { bNow = 1; }
     if (bNow == 1 && bLatch == 0
+            && barracksBuilt == BB_DONE
             && barracksQueueCount < QUEUE_MAX
             && crystalStockpile >= SOLDIER_COST_CRYSTAL
             && woodStockpile >= SOLDIER_COST_WOOD) {
@@ -1133,7 +1290,7 @@ while (window.isOpen()) {
     }
     bLatch = bNow;
 
-    // F5 / F9.
+    // F5 / F9 — in-memory snapshot.
     int f5Now = 0;
     if (Keyboard::isKeyPressed(kF5)) { f5Now = 1; }
     if (f5Now == 1 && f5Latch == 0) {
@@ -1161,32 +1318,26 @@ while (window.isOpen()) {
             snapUTargetEnemy[i] = units[i].targetEnemy;
             snapUAttackT[i]     = units[i].attackTimer;
         }
-        for (int k = 0; k < NODE_COUNT; k++) {
-            snapNodeAmount[k] = nodes[k].amount;
-        }
-        for (int e = 0; e < ENEMY_COUNT; e++) {
-            snapEnemyHp[e] = enemies[e].hp;
-        }
+        for (int k = 0; k < NODE_COUNT; k++) { snapNodeAmount[k] = nodes[k].amount; }
+        for (int e = 0; e < ENEMY_COUNT; e++) { snapEnemyHp[e] = enemies[e].hp; }
+        snapBarracksBuilt = barracksBuilt;
+        snapBarracksX     = BARRACKS_X;
+        snapBarracksY     = BARRACKS_Y;
+        snapBarracksConstr = barracksConstructionProg;
         snapHallQueueCnt = hallQueueCount;
-        for (int q = 0; q < hallQueueCount; q++) {
-            snapHallQueue[q] = hallQueue[q];
-        }
+        for (int q = 0; q < hallQueueCount; q++) { snapHallQueue[q] = hallQueue[q]; }
         snapHallBuildProg = hallBuildProg;
         snapBarracksQueueCnt = barracksQueueCount;
-        for (int q = 0; q < barracksQueueCount; q++) {
-            snapBarracksQueue[q] = barracksQueue[q];
-        }
+        for (int q = 0; q < barracksQueueCount; q++) { snapBarracksQueue[q] = barracksQueue[q]; }
         snapBarracksBuildProg = barracksBuildProg;
-        // Save the explored mask only — VISIBLE cells re-derive each
-        // frame from unit/building positions.
         for (int c = 0; c < fogCellCount; c++) {
             int st = fog[c];
             if (st == FOG_VISIBLE) { snapFog[c] = FOG_EXPLORED; }
             else                    { snapFog[c] = st; }
         }
         hasSnapshot = 1;
-        toastMsg = "Saved";
-        toastTimer = 2.0;
+        bannerMsg = "Saved";
+        bannerTimer = 2.0;
     }
     f5Latch = f5Now;
 
@@ -1221,30 +1372,25 @@ while (window.isOpen()) {
             units[i].targetEnemy  = snapUTargetEnemy[i];
             units[i].attackTimer  = snapUAttackT[i];
         }
-        for (int k = 0; k < NODE_COUNT; k++) {
-            nodes[k].amount = snapNodeAmount[k];
-        }
-        for (int e = 0; e < ENEMY_COUNT; e++) {
-            enemies[e].hp = snapEnemyHp[e];
-        }
+        for (int k = 0; k < NODE_COUNT; k++) { nodes[k].amount = snapNodeAmount[k]; }
+        for (int e = 0; e < ENEMY_COUNT; e++) { enemies[e].hp = snapEnemyHp[e]; }
+        barracksBuilt = snapBarracksBuilt;
+        BARRACKS_X    = snapBarracksX;
+        BARRACKS_Y    = snapBarracksY;
+        barracksConstructionProg = snapBarracksConstr;
         hallQueueCount = snapHallQueueCnt;
-        for (int q = 0; q < hallQueueCount; q++) {
-            hallQueue[q] = snapHallQueue[q];
-        }
+        for (int q = 0; q < hallQueueCount; q++) { hallQueue[q] = snapHallQueue[q]; }
         hallBuildProg = snapHallBuildProg;
         barracksQueueCount = snapBarracksQueueCnt;
-        for (int q = 0; q < barracksQueueCount; q++) {
-            barracksQueue[q] = snapBarracksQueue[q];
-        }
+        for (int q = 0; q < barracksQueueCount; q++) { barracksQueue[q] = snapBarracksQueue[q]; }
         barracksBuildProg = snapBarracksBuildProg;
-        for (int c = 0; c < fogCellCount; c++) {
-            fog[c] = snapFog[c];
-        }
+        for (int c = 0; c < fogCellCount; c++) { fog[c] = snapFog[c]; }
         hallSelected = 0;
         barracksSelected = 0;
         selecting = 0;
-        toastMsg = "Loaded";
-        toastTimer = 2.0;
+        placingBarracks = 0;
+        bannerMsg = "Loaded";
+        bannerTimer = 2.0;
     }
     f9Latch = f9Now;
 
@@ -1258,7 +1404,7 @@ while (window.isOpen()) {
     cam.setSize((float)WIN_W * camZoom, (float)WIN_H * camZoom);
 
     // ============================================================
-    // build queue ticks — each building advances independently
+    // build queue ticks + barracks construction
     // ============================================================
     if (hallQueueCount > 0) {
         int headType = hallQueue[0];
@@ -1280,9 +1426,10 @@ while (window.isOpen()) {
             }
             hallQueueCount = hallQueueCount - 1;
             hallBuildProg = 0.0;
+            sfxComplete.play();
         }
     }
-    if (barracksQueueCount > 0) {
+    if (barracksBuilt == BB_DONE && barracksQueueCount > 0) {
         int headType = barracksQueue[0];
         float bt = buildTimeOf(headType);
         barracksBuildProg = barracksBuildProg + dt;
@@ -1302,11 +1449,22 @@ while (window.isOpen()) {
             }
             barracksQueueCount = barracksQueueCount - 1;
             barracksBuildProg = 0.0;
+            sfxComplete.play();
+        }
+    }
+
+    // Barracks construction timer.
+    if (barracksBuilt == BB_BUILDING) {
+        barracksConstructionProg = barracksConstructionProg + dt;
+        if (barracksConstructionProg >= BARRACKS_BUILD_TIME) {
+            barracksBuilt = BB_DONE;
+            barracksConstructionProg = BARRACKS_BUILD_TIME;
+            sfxComplete.play();
         }
     }
 
     // ============================================================
-    // simulation
+    // simulation (FSM + movement + grid separation)
     // ============================================================
     float harvestR2 = HARVEST_RANGE * HARVEST_RANGE;
     float depositR2 = DEPOSIT_RANGE * DEPOSIT_RANGE;
@@ -1445,10 +1603,7 @@ while (window.isOpen()) {
         }
     }
 
-    for (int i = 0; i < unitCount; i++) {
-        sepDX[i] = 0.0;
-        sepDY[i] = 0.0;
-    }
+    for (int i = 0; i < unitCount; i++) { sepDX[i] = 0.0; sepDY[i] = 0.0; }
     for (int c = 0; c < cellCount; c++) { cellHead[c] = -1; }
     float invCell = 1.0 / SEP_GRID_CELL;
     for (int i = 0; i < unitCount; i++) {
@@ -1515,9 +1670,7 @@ while (window.isOpen()) {
     }
 
     // ============================================================
-    // fog of war — downgrade VISIBLE -> EXPLORED, then re-reveal
-    // around friendly entities, then rebuild only the cells whose
-    // displayed alpha changed since last frame.
+    // fog of war
     // ============================================================
     for (int c = 0; c < fogCellCount; c++) {
         if (fog[c] == FOG_VISIBLE) { fog[c] = FOG_EXPLORED; }
@@ -1528,10 +1681,10 @@ while (window.isOpen()) {
         revealAround(fog, units[i].x, units[i].y, sr);
     }
     revealAround(fog, HALL_X, HALL_Y, HALL_SIGHT);
-    revealAround(fog, BARRACKS_X, BARRACKS_Y, BARRACKS_SIGHT);
+    if (barracksBuilt != BB_NONE) {
+        revealAround(fog, BARRACKS_X, BARRACKS_Y, BARRACKS_SIGHT);
+    }
 
-    // Rebuild only the changed fog cells' VA color (positions are
-    // static, alpha is the only thing that changes).
     for (int c = 0; c < fogCellCount; c++) {
         if (fog[c] != fogPrev[c]) {
             int st = fog[c];
@@ -1562,12 +1715,9 @@ while (window.isOpen()) {
     int soldierCount = 0;
     int selCount     = 0;
     for (int i = 0; i < unitCount; i++) {
-        if (units[i].type == UT_WORKER) {
-            workerCount = workerCount + 1;
-        } else {
-            soldierCount = soldierCount + 1;
-        }
-        if (units[i].selected == 1) { selCount = selCount + 1; }
+        if (units[i].type == UT_WORKER) { workerCount = workerCount + 1; }
+        else                              { soldierCount = soldierCount + 1; }
+        if (units[i].selected == 1)     { selCount = selCount + 1; }
     }
     int totalQueue = hallQueueCount + barracksQueueCount;
 
@@ -1607,9 +1757,9 @@ while (window.isOpen()) {
         prevFps = fpsValue;
     }
 
-    if (toastTimer > 0.0) {
-        toastTimer = toastTimer - dt;
-        if (toastTimer < 0.0) { toastTimer = 0.0; }
+    if (bannerTimer > 0.0) {
+        bannerTimer = bannerTimer - dt;
+        if (bannerTimer < 0.0) { bannerTimer = 0.0; }
     }
 
     // ============================================================
@@ -1619,7 +1769,6 @@ while (window.isOpen()) {
     Camera::setView(window, cam);
     Draw::vertexArray(window, ground);
 
-    // Resource nodes — render in explored or visible cells.
     for (int k = 0; k < NODE_COUNT; k++) {
         if (nodes[k].amount > 0) {
             int cx = (int)(nodes[k].x / FOG_CELL);
@@ -1645,13 +1794,44 @@ while (window.isOpen()) {
         }
     }
 
-    // Buildings — always render (yours, always known).
+    // Hall.
     Draw::rect(window, hallShape);
     if (hallSelected == 1) { Draw::rect(window, hallSelectionRing); }
-    Draw::rect(window, barracksShape);
-    if (barracksSelected == 1) { Draw::rect(window, barracksSelectionRing); }
 
-    // Enemies — only render if their cell is currently VISIBLE.
+    // Barracks (only if placed).
+    if (barracksBuilt == BB_BUILDING) {
+        barracksConstructShape.setPosition(BARRACKS_X, BARRACKS_Y);
+        Draw::rect(window, barracksConstructShape);
+        // construction bar above
+        float bx = BARRACKS_X - 28.0;
+        float by = BARRACKS_Y - BARRACKS_HALF - 16.0;
+        constructBarBg.setPosition(bx, by);
+        Draw::rect(window, constructBarBg);
+        float r = barracksConstructionProg / BARRACKS_BUILD_TIME;
+        if (r > 1.0) { r = 1.0; }
+        constructBarFg.setSize(54.0 * r, 6.0);
+        constructBarFg.setPosition(bx + 1.0, by + 1.0);
+        Draw::rect(window, constructBarFg);
+    } else if (barracksBuilt == BB_DONE) {
+        barracksShape.setPosition(BARRACKS_X, BARRACKS_Y);
+        Draw::rect(window, barracksShape);
+        if (barracksSelected == 1) {
+            barracksSelectionRing.setPosition(BARRACKS_X, BARRACKS_Y);
+            Draw::rect(window, barracksSelectionRing);
+        }
+    }
+
+    // Placement-mode ghost.
+    if (placingBarracks == 1) {
+        float sw = (float)WIN_W * camZoom;
+        float sh = (float)WIN_H * camZoom;
+        float[] w = Coords::screenToWorld(mx, my, camX, camY, sw, sh,
+                                            (float)WIN_W, (float)WIN_H);
+        barracksGhost.setPosition(w[0], w[1]);
+        Draw::rect(window, barracksGhost);
+    }
+
+    // Enemies — fog-gated.
     for (int e = 0; e < ENEMY_COUNT; e++) {
         if (enemies[e].hp > 0) {
             int cx = (int)(enemies[e].x / FOG_CELL);
@@ -1675,7 +1855,6 @@ while (window.isOpen()) {
         }
     }
 
-    // Friendly units — always render.
     for (int i = 0; i < unitCount; i++) {
         if (units[i].selected == 1) {
             unitRing.setPosition(units[i].x, units[i].y);
@@ -1701,8 +1880,6 @@ while (window.isOpen()) {
         }
     }
 
-    // Fog overlay — drawn on top of everything in the world pass, so
-    // hidden terrain darkens and unexplored areas blackout.
     Draw::vertexArray(window, fogVA);
 
     // ============================================================
@@ -1733,37 +1910,54 @@ while (window.isOpen()) {
     Draw::text(window, txtFps);
     Draw::text(window, txtHint);
 
-    // Build menu — content swaps based on which building is selected.
-    if (hallSelected == 1 || barracksSelected == 1) {
+    // Build menu — content depends on which building is selected and
+    // whether the Barracks has been placed yet.
+    if (hallSelected == 1 || (barracksSelected == 1 && barracksBuilt == BB_DONE)) {
         bmPanel.setPosition(bmX, bmY);
         Draw::rect(window, bmPanel);
 
-        // Pick the active queue + label/cost.
+        if (hallSelected == 1) {
+            // Worker button: centered if Barracks already exists,
+            // otherwise left-aligned to make room for "Build Barracks".
+            float wbX = btnLeftX;
+            if (barracksBuilt != BB_NONE) { wbX = btnCenterX; }
+            btnWorkerBg.setPosition(wbX, btnRowY);
+            Draw::rect(window, btnWorkerBg);
+            btnWorkerLabel.setPosition(wbX + 38.0, btnRowY + 6.0);
+            Draw::text(window, btnWorkerLabel);
+            btnWorkerCost.setPosition(wbX + 36.0, btnRowY + 30.0);
+            Draw::text(window, btnWorkerCost);
+
+            if (barracksBuilt == BB_NONE) {
+                btnBuildBarracksBg.setPosition(btnRightX, btnRowY);
+                Draw::rect(window, btnBuildBarracksBg);
+                btnBarracksLabel.setPosition(btnRightX + 16.0, btnRowY + 6.0);
+                Draw::text(window, btnBarracksLabel);
+                btnBarracksCost.setPosition(btnRightX + 36.0, btnRowY + 30.0);
+                Draw::text(window, btnBarracksCost);
+            }
+        } else {
+            // Barracks menu — Soldier button centered.
+            btnSoldierBg.setPosition(btnCenterX, btnRowY);
+            Draw::rect(window, btnSoldierBg);
+            btnSoldierLabel.setPosition(btnCenterX + 38.0, btnRowY + 6.0);
+            Draw::text(window, btnSoldierLabel);
+            btnSoldierCost.setPosition(btnCenterX + 36.0, btnRowY + 30.0);
+            Draw::text(window, btnSoldierCost);
+        }
+
+        // Active queue for whichever building is open.
         int[]  activeQ;
         int    activeQCount;
         float  activeProg;
         if (hallSelected == 1) {
-            activeQ      = hallQueue;
+            activeQ = hallQueue;
             activeQCount = hallQueueCount;
-            activeProg   = hallBuildProg;
-
-            btnWorkerBg.setPosition(btn0X, btn0Y);
-            Draw::rect(window, btnWorkerBg);
-            btnWorkerLabel.setPosition(btn0X + 36.0, btn0Y + 6.0);
-            Draw::text(window, btnWorkerLabel);
-            btnWorkerCost.setPosition(btn0X + 36.0, btn0Y + 30.0);
-            Draw::text(window, btnWorkerCost);
+            activeProg = hallBuildProg;
         } else {
-            activeQ      = barracksQueue;
+            activeQ = barracksQueue;
             activeQCount = barracksQueueCount;
-            activeProg   = barracksBuildProg;
-
-            btnSoldierBg.setPosition(btn0X, btn0Y);
-            Draw::rect(window, btnSoldierBg);
-            btnSoldierLabel.setPosition(btn0X + 38.0, btn0Y + 6.0);
-            Draw::text(window, btnSoldierLabel);
-            btnSoldierCost.setPosition(btn0X + 36.0, btn0Y + 30.0);
-            Draw::text(window, btnSoldierCost);
+            activeProg = barracksBuildProg;
         }
 
         txtQueueLabel.setPosition(qSlot0X - 50.0, qSlotY + 10.0);
@@ -1802,9 +1996,10 @@ while (window.isOpen()) {
     Draw::rect(window, mmBg);
     mmHallDot.setPosition(mmX + HALL_X * mmScale, mmY + HALL_Y * mmScale);
     Draw::rect(window, mmHallDot);
-    mmBarracksDot.setPosition(mmX + BARRACKS_X * mmScale, mmY + BARRACKS_Y * mmScale);
-    Draw::rect(window, mmBarracksDot);
-
+    if (barracksBuilt != BB_NONE) {
+        mmBarracksDot.setPosition(mmX + BARRACKS_X * mmScale, mmY + BARRACKS_Y * mmScale);
+        Draw::rect(window, mmBarracksDot);
+    }
     for (int k = 0; k < NODE_COUNT; k++) {
         if (nodes[k].amount > 0) {
             int cx = (int)(nodes[k].x / FOG_CELL);
@@ -1863,17 +2058,24 @@ while (window.isOpen()) {
     mmViewport.setPosition(vx, vy);
     Draw::rect(window, mmViewport);
 
-    if (toastTimer > 0.0) {
-        toastTxt.setString(toastMsg);
-        toastTxt.setPosition((float)WIN_W * 0.5 - 35.0, 30.0);
-        Draw::text(window, toastTxt);
+    // Banner — placement prompt (persistent) or save/load toast (timed).
+    int showBanner = 0;
+    if (bannerTimer > 0.0)        { showBanner = 1; }
+    if (bannerTimer < 0.0)        { showBanner = 1; }
+    if (placingBarracks == 0 && bannerTimer == 0.0) {
+        bannerMsg = "";
+    }
+    if (showBanner == 1 && bannerMsg != "") {
+        bannerTxt.setString(bannerMsg);
+        bannerTxt.setPosition(20.0, 8.0);
+        Draw::text(window, bannerTxt);
     }
 
     window.display();
 }
 
 // ---- cleanup ----
-toastTxt.destroy();
+bannerTxt.destroy();
 
 qLetterS.destroy();
 qLetterW.destroy();
@@ -1883,10 +2085,13 @@ slotWorker.destroy();
 slotEmpty.destroy();
 txtQueueLabel.destroy();
 
+btnBarracksCost.destroy();
+btnBarracksLabel.destroy();
 btnSoldierCost.destroy();
 btnSoldierLabel.destroy();
 btnWorkerCost.destroy();
 btnWorkerLabel.destroy();
+btnBuildBarracksBg.destroy();
 btnSoldierBg.destroy();
 btnWorkerBg.destroy();
 bmPanel.destroy();
@@ -1916,7 +2121,11 @@ hudFont.destroy();
 fogVA.destroy();
 
 selBox.destroy();
+constructBarFg.destroy();
+constructBarBg.destroy();
+barracksGhost.destroy();
 barracksSelectionRing.destroy();
+barracksConstructShape.destroy();
 barracksShape.destroy();
 hallSelectionRing.destroy();
 hallShape.destroy();
@@ -1933,4 +2142,14 @@ cam.destroy();
 ground.destroy();
 frame.destroy();
 window.destroy();
+
+sfxClick.destroy();
+sfxClickBuf.destroy();
+sfxComplete.destroy();
+sfxCompleteBuf.destroy();
+sfxPlace.destroy();
+sfxPlaceBuf.destroy();
+bgMusic.stop();
+bgMusic.destroy();
+
 __plugin_unload("mt/mtype_sfml.dll");
