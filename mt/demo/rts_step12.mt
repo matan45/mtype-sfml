@@ -1,25 +1,19 @@
-// RTS step 11 — buildable Barracks + audio.
+// RTS step 12 — biome terrain.
 //
-// Builds on rts_step10:
-//   * The Barracks no longer starts on the map. The Town Hall's build
-//     menu now has a "Build Barracks" button next to "Worker". Click
-//     it, then left-click somewhere in the world to place. The cost
-//     (BARRACKS_BUILD_COST_*) is deducted at placement, and the
-//     barracks then "constructs" over BARRACKS_BUILD_TIME seconds
-//     before becoming functional.
-//   * During construction the barracks renders semi-transparent with
-//     a progress bar above it; it can't be selected and doesn't queue
-//     anything. Once complete, it works exactly like the auto-placed
-//     barracks in step 10.
-//   * Right-click during placement-mode cancels (no refund needed —
-//     resources only get spent on actual placement).
-//   * Audio: background music streams from MUSIC_PATH on loop (drop a
-//     file there to enable). Three sound effects play through Windows
-//     system .wav files: place, complete, click.
+// Builds on rts_step11. The only real change is the ground layer: a
+// procedural value-noise field decides between deep water, shallow
+// water, sand, two shades of grass, forest, stone, and mountain. The
+// noise is multi-octave (4 octaves, persistence 0.5) so you get smooth
+// continent-shaped blobs rather than per-tile static.
 //
-// Everything else from step 10 (worker FSM, soldier FSM, harvest loop,
-// crystal+wood, formations, separation grid, fog of war, minimap,
-// build queue, in-memory save/load) carries over unchanged.
+// Land is force-carved around the Town Hall and every resource node so
+// the seeded workers always start on grass and nodes never spawn in
+// water. Per-tile color variation (a deterministic ±8 per channel hash)
+// keeps the surface from looking flat-painted.
+//
+// Terrain is purely visual in this step — units still walk through
+// water and mountains. Step 13 candidate: make water+mountain
+// impassable and reroute movement around them.
 
 import * from "../lib/Sfml.mt";
 import * from "../lib/Graphics.mt";
@@ -28,10 +22,7 @@ import * from "../lib/Audio.mt";
 
 __plugin_load("mt/mtype_sfml.dll");
 
-string HUD_FONT_PATH   = "C:/Windows/Fonts/arial.ttf";
-// Drop any OGG/WAV/FLAC SFML can read at this path to enable bg music.
-// If the file's missing the load returns an invalid handle and .play()
-// silently does nothing — the game still runs.
+string HUD_FONT_PATH     = "C:/Windows/Fonts/arial.ttf";
 string MUSIC_PATH      = "mt/demo/music.mp3";
 string SFX_PLACE_PATH  = "mt/demo/chord.wav";
 string SFX_COMPLETE_PATH = "mt/demo/tada.wav";
@@ -125,10 +116,21 @@ int WS_TO_HALL    = 3;
 int SOL_TO_ENEMY  = 10;
 int SOL_ATTACKING = 11;
 
-// ---- Barracks build-state values ----
-int BB_NONE     = 0;     // not placed yet
-int BB_BUILDING = 1;     // placed, under construction
-int BB_DONE     = 2;     // fully functional
+// ---- Barracks build-state ----
+int BB_NONE     = 0;
+int BB_BUILDING = 1;
+int BB_DONE     = 2;
+
+// ---- biome IDs (low = water, high = mountain). Ordered so we can
+// test "is this land?" with `biome[c] >= BIO_SAND`. ----
+int BIO_DEEP_WATER  = 0;
+int BIO_WATER       = 1;
+int BIO_SAND        = 2;
+int BIO_GRASS_LIGHT = 3;
+int BIO_GRASS_DARK  = 4;
+int BIO_FOREST      = 5;
+int BIO_STONE       = 6;
+int BIO_MOUNTAIN    = 7;
 
 // ---- data model ----
 class Unit {
@@ -219,6 +221,60 @@ function isqrtCeil(int n): int {
     return s;
 }
 
+// 2D integer hash. Multiplicative + LCG, no bit ops (mType's surface
+// for `>>`/`^` isn't something I want to rely on here). Period is huge
+// enough for a 64x64 map; collisions visually invisible.
+function hash2i(int x, int y): int {
+    int h = x * 73856093 + y * 19349663;
+    h = h * 1664525 + 1013904223;
+    if (h < 0) { h = -h; }
+    return h;
+}
+
+// Random value at integer grid point in [0, 1).
+function valueAt(int x, int y): float {
+    int h = hash2i(x, y);
+    return (float)(h % 1000000) / 1000000.0;
+}
+
+function smoothStep(float t): float {
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// Smooth value-noise sample at fractional (x, y).
+function noise2D(float x, float y): float {
+    int x0 = (int)x;
+    int y0 = (int)y;
+    if ((float)x0 > x) { x0 = x0 - 1; }   // floor for negatives
+    if ((float)y0 > y) { y0 = y0 - 1; }
+    float fx = x - (float)x0;
+    float fy = y - (float)y0;
+    float sx = smoothStep(fx);
+    float sy = smoothStep(fy);
+    float a = valueAt(x0,     y0);
+    float b = valueAt(x0 + 1, y0);
+    float c = valueAt(x0,     y0 + 1);
+    float d = valueAt(x0 + 1, y0 + 1);
+    float ab = a + (b - a) * sx;
+    float cd = c + (d - c) * sx;
+    return ab + (cd - ab) * sy;
+}
+
+// Multi-octave fractional Brownian motion. Roughly 0..0.94 range.
+function fbm(float x, float y): float {
+    float total = 0.0;
+    float amp   = 0.5;
+    float freq  = 1.0;
+    int i = 0;
+    while (i < 4) {
+        total = total + noise2D(x * freq, y * freq) * amp;
+        amp   = amp * 0.5;
+        freq  = freq * 2.0;
+        i = i + 1;
+    }
+    return total;
+}
+
 class Coords {
     public static function screenToWorld(float px, float py,
                                           float cx, float cy,
@@ -273,57 +329,43 @@ function revealAround(int[] fogArr, float sx, float sy, float radius): void {
     }
 }
 
-// ---- window + tilemap ----
-RenderWindow window = Sfml::createWindow("RTS — step 11", WIN_W, WIN_H);
+// ---- window ----
+RenderWindow window = Sfml::createWindow("RTS — step 12", WIN_W, WIN_H);
 window.setFramerateLimit(144);
 
-int tileCount   = MAP_TILES * MAP_TILES;
-int vertexCount = tileCount * 6;
-VertexArray ground = VertexArrays::create(Primitive::triangles(), vertexCount);
+// ---- biome generation ----
+//
+// 1. Sample fbm at each tile. Use a fixed offset so the world isn't
+//    centered on noise origin.
+// 2. Threshold into biome IDs.
+// 3. Carve land around the Hall (radius 8 tiles) and every resource
+//    node (radius 2 tiles) so spawn areas + harvesting are always
+//    accessible.
+int[] biome = new int[MAP_TILES * MAP_TILES];
+
+float NOISE_FREQ   = 0.075;     // smaller = bigger continents
+float NOISE_ORIGIN = 137.0;     // shifts the sampled patch
 for (int ty = 0; ty < MAP_TILES; ty++) {
     for (int tx = 0; tx < MAP_TILES; tx++) {
-        float x0 = (float)(tx * TILE_PX);
-        float y0 = (float)(ty * TILE_PX);
-        float x1 = x0 + (float)TILE_PX;
-        float y1 = y0 + (float)TILE_PX;
-        int parity = (tx + ty) % 2;
-        int base = 48;
-        if (parity == 1) { base = 60; }
-        int band = ((tx + ty) * 3) % 40;
-        int r = base + band / 2;
-        int g = base + 20 + band / 3;
-        int b = base + 10;
-        int idx = (ty * MAP_TILES + tx) * 6;
-        ground.setVertex(idx + 0, x0, y0, r, g, b, 255, 0.0, 0.0);
-        ground.setVertex(idx + 1, x1, y0, r, g, b, 255, 0.0, 0.0);
-        ground.setVertex(idx + 2, x1, y1, r, g, b, 255, 0.0, 0.0);
-        ground.setVertex(idx + 3, x0, y0, r, g, b, 255, 0.0, 0.0);
-        ground.setVertex(idx + 4, x1, y1, r, g, b, 255, 0.0, 0.0);
-        ground.setVertex(idx + 5, x0, y1, r, g, b, 255, 0.0, 0.0);
+        float v = fbm((float)tx * NOISE_FREQ + NOISE_ORIGIN,
+                       (float)ty * NOISE_FREQ + NOISE_ORIGIN);
+        int b = BIO_GRASS_LIGHT;
+        if      (v < 0.30) { b = BIO_DEEP_WATER; }
+        else if (v < 0.38) { b = BIO_WATER; }
+        else if (v < 0.43) { b = BIO_SAND; }
+        else if (v < 0.52) { b = BIO_GRASS_LIGHT; }
+        else if (v < 0.62) { b = BIO_GRASS_DARK; }
+        else if (v < 0.74) { b = BIO_FOREST; }
+        else if (v < 0.85) { b = BIO_STONE; }
+        else               { b = BIO_MOUNTAIN; }
+        biome[ty * MAP_TILES + tx] = b;
     }
 }
 
-// ---- camera ----
-float camX    = WORLD_W * 0.5;
-float camY    = WORLD_H * 0.5;
-float camZoom = 1.0;
-View  cam     = Views::create(camX, camY, (float)WIN_W, (float)WIN_H);
-
-// ---- buildings ----
+// Forward declarations for hall + nodes so we can carve. (Their
+// rendering shapes are defined further down.)
 float HALL_X = WORLD_W * 0.5;
 float HALL_Y = WORLD_H * 0.5;
-
-// Barracks starts unplaced. (BARRACKS_X/Y get set when placed.)
-int   barracksBuilt  = BB_NONE;
-float BARRACKS_X     = 0.0;
-float BARRACKS_Y     = 0.0;
-float barracksConstructionProg = 0.0;
-
-// Placement-mode flag: 1 while the player is choosing where to drop
-// the barracks. Toggled by clicking "Build Barracks" in the Hall menu.
-int placingBarracks = 0;
-
-// ---- resource nodes ----
 int NODE_COUNT = 9;
 Node[] nodes = new Node[NODE_COUNT];
 nodes[0] = new Node(HALL_X - 280.0, HALL_Y - 220.0, NODE_AMOUNT_INIT, RES_CRYSTAL);
@@ -336,7 +378,125 @@ nodes[6] = new Node(HALL_X + 180.0, HALL_Y - 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 nodes[7] = new Node(HALL_X - 200.0, HALL_Y + 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 nodes[8] = new Node(HALL_X + 200.0, HALL_Y + 320.0, NODE_AMOUNT_INIT, RES_WOOD);
 
-// More starter resources so the player can build a barracks early.
+// Carve land around the Hall (8-tile radius circle).
+int hallTx = (int)(HALL_X / (float)TILE_PX);
+int hallTy = (int)(HALL_Y / (float)TILE_PX);
+for (int dy = -8; dy <= 8; dy++) {
+    for (int dx = -8; dx <= 8; dx++) {
+        int tx = hallTx + dx;
+        int ty = hallTy + dy;
+        if (tx < 0 || tx >= MAP_TILES || ty < 0 || ty >= MAP_TILES) { continue; }
+        if (dx * dx + dy * dy > 64) { continue; }
+        int idx = ty * MAP_TILES + tx;
+        int b = biome[idx];
+        if (b < BIO_GRASS_LIGHT || b > BIO_GRASS_DARK) {
+            biome[idx] = BIO_GRASS_LIGHT;
+        }
+    }
+}
+// Carve land around each node (2-tile radius square).
+for (int k = 0; k < NODE_COUNT; k++) {
+    int ntx = (int)(nodes[k].x / (float)TILE_PX);
+    int nty = (int)(nodes[k].y / (float)TILE_PX);
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            int tx = ntx + dx;
+            int ty = nty + dy;
+            if (tx < 0 || tx >= MAP_TILES || ty < 0 || ty >= MAP_TILES) { continue; }
+            int idx = ty * MAP_TILES + tx;
+            if (biome[idx] < BIO_GRASS_LIGHT) {
+                biome[idx] = BIO_GRASS_DARK;
+            }
+        }
+    }
+}
+
+// ---- biome -> base RGB lookup ----
+//
+// Inlined here as a flat function rather than a per-biome table because
+// mType arrays are typed and small constant arrays for r/g/b would add
+// boilerplate. The +/- 8 jitter is applied at vertex emit time using
+// a tile hash; this just returns the biome's "centre" color.
+function biomeR(int b): int {
+    if (b == BIO_DEEP_WATER)  { return 30; }
+    if (b == BIO_WATER)       { return 60; }
+    if (b == BIO_SAND)        { return 210; }
+    if (b == BIO_GRASS_LIGHT) { return 95; }
+    if (b == BIO_GRASS_DARK)  { return 65; }
+    if (b == BIO_FOREST)      { return 35; }
+    if (b == BIO_STONE)       { return 115; }
+    return 80;   // mountain
+}
+function biomeG(int b): int {
+    if (b == BIO_DEEP_WATER)  { return 55; }
+    if (b == BIO_WATER)       { return 100; }
+    if (b == BIO_SAND)        { return 195; }
+    if (b == BIO_GRASS_LIGHT) { return 145; }
+    if (b == BIO_GRASS_DARK)  { return 110; }
+    if (b == BIO_FOREST)      { return 80; }
+    if (b == BIO_STONE)       { return 115; }
+    return 75;
+}
+function biomeB(int b): int {
+    if (b == BIO_DEEP_WATER)  { return 120; }
+    if (b == BIO_WATER)       { return 165; }
+    if (b == BIO_SAND)        { return 145; }
+    if (b == BIO_GRASS_LIGHT) { return 70; }
+    if (b == BIO_GRASS_DARK)  { return 50; }
+    if (b == BIO_FOREST)      { return 35; }
+    if (b == BIO_STONE)       { return 120; }
+    return 80;
+}
+
+// ---- tilemap VertexArray (one big triangle list, biome-colored) ----
+int tileCount   = MAP_TILES * MAP_TILES;
+int vertexCount = tileCount * 6;
+VertexArray ground = VertexArrays::create(Primitive::triangles(), vertexCount);
+for (int ty = 0; ty < MAP_TILES; ty++) {
+    for (int tx = 0; tx < MAP_TILES; tx++) {
+        float x0 = (float)(tx * TILE_PX);
+        float y0 = (float)(ty * TILE_PX);
+        float x1 = x0 + (float)TILE_PX;
+        float y1 = y0 + (float)TILE_PX;
+
+        int b = biome[ty * MAP_TILES + tx];
+        int r = biomeR(b);
+        int g = biomeG(b);
+        int bl = biomeB(b);
+
+        // Per-tile color jitter: ±8 per channel from a tile hash so
+        // adjacent same-biome tiles don't look flat-painted.
+        int jr = hash2i(tx, ty + 1) % 17 - 8;
+        int jg = hash2i(tx + 1, ty) % 17 - 8;
+        int jb = hash2i(tx + 2, ty + 3) % 17 - 8;
+        int rr = r + jr; if (rr < 0) { rr = 0; } if (rr > 255) { rr = 255; }
+        int gg = g + jg; if (gg < 0) { gg = 0; } if (gg > 255) { gg = 255; }
+        int bb = bl + jb; if (bb < 0) { bb = 0; } if (bb > 255) { bb = 255; }
+
+        int idx = (ty * MAP_TILES + tx) * 6;
+        ground.setVertex(idx + 0, x0, y0, rr, gg, bb, 255, 0.0, 0.0);
+        ground.setVertex(idx + 1, x1, y0, rr, gg, bb, 255, 0.0, 0.0);
+        ground.setVertex(idx + 2, x1, y1, rr, gg, bb, 255, 0.0, 0.0);
+        ground.setVertex(idx + 3, x0, y0, rr, gg, bb, 255, 0.0, 0.0);
+        ground.setVertex(idx + 4, x1, y1, rr, gg, bb, 255, 0.0, 0.0);
+        ground.setVertex(idx + 5, x0, y1, rr, gg, bb, 255, 0.0, 0.0);
+    }
+}
+
+// ---- camera ----
+float camX    = WORLD_W * 0.5;
+float camY    = WORLD_H * 0.5;
+float camZoom = 1.0;
+View  cam     = Views::create(camX, camY, (float)WIN_W, (float)WIN_H);
+
+// ---- buildings (Barracks starts unplaced) ----
+int   barracksBuilt  = BB_NONE;
+float BARRACKS_X     = 0.0;
+float BARRACKS_Y     = 0.0;
+float barracksConstructionProg = 0.0;
+int   placingBarracks = 0;
+
+// ---- starter resources ----
 int crystalStockpile = 70;
 int woodStockpile    = 50;
 
@@ -348,10 +508,9 @@ enemies[1] = new Enemy(HALL_X + 640.0, HALL_Y - 480.0, ENEMY_HP_INIT);
 enemies[2] = new Enemy(HALL_X + 600.0, HALL_Y + 520.0, ENEMY_HP_INIT);
 enemies[3] = new Enemy(HALL_X - 660.0, HALL_Y + 490.0, ENEMY_HP_INIT);
 
-// ---- unit pool. No soldiers seeded — you need the Barracks first. ----
+// ---- unit pool ----
 Unit[] units = new Unit[MAX_UNITS];
 int unitCount = 0;
-
 float seedX = HALL_X - 100.0;
 float seedY = HALL_Y + HALL_HALF + 30.0;
 for (int sy = 0; sy < 4; sy++) {
@@ -419,25 +578,21 @@ int[] cellHead  = new int[cellCount];
 int[] cellNext  = new int[MAX_UNITS];
 
 // ---- audio ----
-//
-// Music streams from disk; sounds are loaded into memory. SFML 3 will
-// silently produce a no-op handle if any of these files don't exist,
-// so the game still runs without audio assets.
 Music bgMusic = MusicPlayer::open(MUSIC_PATH);
 bgMusic.setLoop(true);
 bgMusic.setVolume(28.0);
 bgMusic.play();
 
-SoundBuffer sfxPlaceBuf   = SoundBuffers::load(SFX_PLACE_PATH);
-Sound        sfxPlace     = Sounds::create(sfxPlaceBuf);
+SoundBuffer sfxPlaceBuf    = SoundBuffers::load(SFX_PLACE_PATH);
+Sound       sfxPlace       = Sounds::create(sfxPlaceBuf);
 sfxPlace.setVolume(60.0);
 
 SoundBuffer sfxCompleteBuf = SoundBuffers::load(SFX_COMPLETE_PATH);
-Sound        sfxComplete   = Sounds::create(sfxCompleteBuf);
+Sound       sfxComplete    = Sounds::create(sfxCompleteBuf);
 sfxComplete.setVolume(55.0);
 
 SoundBuffer sfxClickBuf = SoundBuffers::load(SFX_CLICK_PATH);
-Sound        sfxClick   = Sounds::create(sfxClickBuf);
+Sound       sfxClick    = Sounds::create(sfxClickBuf);
 sfxClick.setVolume(40.0);
 
 // ---- world-space draw shapes ----
@@ -506,8 +661,6 @@ hallSelectionRing.setFillColor(0, 0, 0, 0);
 hallSelectionRing.setOutlineColor(255, 230, 80, 230);
 hallSelectionRing.setOutlineThickness(3.0);
 
-// Two barracks shapes: full opacity for the done state, and a faded
-// variant for "under construction". Same size + outline.
 RectangleShape barracksShape = Rectangles::create(BARRACKS_HALF * 2.0,
                                                    BARRACKS_HALF * 2.0);
 barracksShape.setOrigin(BARRACKS_HALF, BARRACKS_HALF);
@@ -529,8 +682,6 @@ barracksSelectionRing.setFillColor(0, 0, 0, 0);
 barracksSelectionRing.setOutlineColor(255, 230, 80, 230);
 barracksSelectionRing.setOutlineThickness(3.0);
 
-// Placement-mode "ghost": semi-transparent outline that follows the
-// mouse while choosing where to drop the barracks.
 RectangleShape barracksGhost = Rectangles::create(BARRACKS_HALF * 2.0,
                                                    BARRACKS_HALF * 2.0);
 barracksGhost.setOrigin(BARRACKS_HALF, BARRACKS_HALF);
@@ -538,7 +689,6 @@ barracksGhost.setFillColor(120, 60, 50, 90);
 barracksGhost.setOutlineColor(255, 240, 180, 220);
 barracksGhost.setOutlineThickness(2.0);
 
-// Construction progress bar above the barracks while it's being built.
 RectangleShape constructBarBg = Rectangles::create(56.0, 8.0);
 constructBarBg.setFillColor(20, 20, 20, 230);
 constructBarBg.setOutlineColor(0, 0, 0, 255);
@@ -607,12 +757,10 @@ Text txtHint = Texts::create(hudFont,
 txtHint.setFillColor(180, 180, 190, 220);
 txtHint.setPosition(10.0, (float)WIN_H - 22.0);
 
-// Top-center banner used for placement-mode prompt + save/load toast.
 Text bannerTxt = Texts::create(hudFont, "", 22);
 bannerTxt.setFillColor(255, 240, 160, 255);
 string bannerMsg  = "";
-float  bannerTimer = 0.0;     // 0 = hidden, >0 = timed toast,
-                              // <0 = persistent (used for placement)
+float  bannerTimer = 0.0;
 
 // ---- build menu ----
 float BM_W   = 400.0;
@@ -621,9 +769,6 @@ float bmX    = (float)WIN_W * 0.5 - BM_W * 0.5;
 float bmY    = (float)WIN_H - 32.0 - BM_H;
 float BTN_W  = 150.0;
 float BTN_H  = 50.0;
-
-// Hall menu can show two buttons (Worker + Build Barracks) side by side;
-// the barracks menu has just one centered button (Soldier).
 float btnLeftX   = bmX + 16.0;
 float btnRightX  = bmX + BM_W - BTN_W - 16.0;
 float btnCenterX = bmX + (BM_W - BTN_W) * 0.5;
@@ -765,7 +910,7 @@ for (int gy = 0; gy < FOG_H; gy++) {
     }
 }
 
-// ---- selection / interaction state ----
+// ---- selection / interaction ----
 int   hallSelected     = 0;
 int   barracksSelected = 0;
 int   selecting        = 0;
@@ -828,9 +973,6 @@ function barracksSpawnY(int seed): float {
 }
 
 while (window.isOpen()) {
-    // ============================================================
-    // events
-    // ============================================================
     int ev = window.pollEvent();
     while (ev != 0) {
         if (ev == evClosed) {
@@ -852,8 +994,6 @@ while (window.isOpen()) {
                 float mye = (float)Event::mouseY();
                 int consumed = 0;
 
-                // Placement mode owns left-click until cancelled or
-                // satisfied. Translate to world, drop the barracks.
                 if (placingBarracks == 1) {
                     float sw = (float)WIN_W * camZoom;
                     float sh = (float)WIN_H * camZoom;
@@ -863,7 +1003,6 @@ while (window.isOpen()) {
                     float wx = w[0];
                     float wy = w[1];
 
-                    // Cheap validity check: don't overlap the hall.
                     float dx = wx - HALL_X;
                     float dy = wy - HALL_Y;
                     float minDist = HALL_HALF + BARRACKS_HALF + 8.0;
@@ -871,7 +1010,6 @@ while (window.isOpen()) {
                     if (dx < 0.0) { dx = -dx; }
                     if (dy < 0.0) { dy = -dy; }
                     if (dx < minDist && dy < minDist) { valid = 0; }
-                    // Also stay inside the world bounds.
                     if (wx < BARRACKS_HALF || wx > WORLD_W - BARRACKS_HALF
                             || wy < BARRACKS_HALF || wy > WORLD_H - BARRACKS_HALF) {
                         valid = 0;
@@ -896,8 +1034,6 @@ while (window.isOpen()) {
 
                 if (consumed == 0) {
                     if (hallSelected == 1) {
-                        // Worker button (left if Build Barracks
-                        // button is showing, otherwise centered).
                         float wbX = btnLeftX;
                         if (barracksBuilt != BB_NONE) { wbX = btnCenterX; }
                         if (inRect(mxe, mye, wbX, btnRowY, BTN_W, BTN_H) == 1) {
@@ -946,8 +1082,6 @@ while (window.isOpen()) {
                     selEndY = selStartY;
                 }
             } else if (mb == mbRight) {
-                // Right-click cancels placement mode without
-                // spending anything.
                 if (placingBarracks == 1) {
                     placingBarracks = 0;
                     bannerMsg = "";
@@ -1233,9 +1367,6 @@ while (window.isOpen()) {
     float dt = frame.restartSeconds();
     if (dt > 0.1) { dt = 0.1; }
 
-    // ============================================================
-    // camera + keyboard shortcuts
-    // ============================================================
     float pan = PAN_SPEED * camZoom * dt;
     if (Keyboard::isKeyPressed(kW)) { camY = camY - pan; }
     if (Keyboard::isKeyPressed(kS)) { camY = camY + pan; }
@@ -1290,7 +1421,6 @@ while (window.isOpen()) {
     }
     bLatch = bNow;
 
-    // F5 / F9 — in-memory snapshot.
     int f5Now = 0;
     if (Keyboard::isKeyPressed(kF5)) { f5Now = 1; }
     if (f5Now == 1 && f5Latch == 0) {
@@ -1403,9 +1533,7 @@ while (window.isOpen()) {
     cam.setCenter(camX, camY);
     cam.setSize((float)WIN_W * camZoom, (float)WIN_H * camZoom);
 
-    // ============================================================
-    // build queue ticks + barracks construction
-    // ============================================================
+    // queues + barracks construction
     if (hallQueueCount > 0) {
         int headType = hallQueue[0];
         float bt = buildTimeOf(headType);
@@ -1453,7 +1581,6 @@ while (window.isOpen()) {
         }
     }
 
-    // Barracks construction timer.
     if (barracksBuilt == BB_BUILDING) {
         barracksConstructionProg = barracksConstructionProg + dt;
         if (barracksConstructionProg >= BARRACKS_BUILD_TIME) {
@@ -1463,9 +1590,7 @@ while (window.isOpen()) {
         }
     }
 
-    // ============================================================
-    // simulation (FSM + movement + grid separation)
-    // ============================================================
+    // FSM + movement + separation (unchanged from step 11)
     float harvestR2 = HARVEST_RANGE * HARVEST_RANGE;
     float depositR2 = DEPOSIT_RANGE * DEPOSIT_RANGE;
     float atkR2     = SOLDIER_ATTACK_RANGE * SOLDIER_ATTACK_RANGE;
@@ -1669,9 +1794,7 @@ while (window.isOpen()) {
         units[i].y = units[i].y + sepDY[i] * sepStep / SEP_RADIUS;
     }
 
-    // ============================================================
-    // fog of war
-    // ============================================================
+    // fog
     for (int c = 0; c < fogCellCount; c++) {
         if (fog[c] == FOG_VISIBLE) { fog[c] = FOG_EXPLORED; }
     }
@@ -1708,9 +1831,7 @@ while (window.isOpen()) {
         }
     }
 
-    // ============================================================
     // HUD bookkeeping
-    // ============================================================
     int workerCount  = 0;
     int soldierCount = 0;
     int selCount     = 0;
@@ -1762,9 +1883,7 @@ while (window.isOpen()) {
         if (bannerTimer < 0.0) { bannerTimer = 0.0; }
     }
 
-    // ============================================================
     // render — world pass
-    // ============================================================
     window.clear(12, 14, 20, 255);
     Camera::setView(window, cam);
     Draw::vertexArray(window, ground);
@@ -1794,15 +1913,12 @@ while (window.isOpen()) {
         }
     }
 
-    // Hall.
     Draw::rect(window, hallShape);
     if (hallSelected == 1) { Draw::rect(window, hallSelectionRing); }
 
-    // Barracks (only if placed).
     if (barracksBuilt == BB_BUILDING) {
         barracksConstructShape.setPosition(BARRACKS_X, BARRACKS_Y);
         Draw::rect(window, barracksConstructShape);
-        // construction bar above
         float bx = BARRACKS_X - 28.0;
         float by = BARRACKS_Y - BARRACKS_HALF - 16.0;
         constructBarBg.setPosition(bx, by);
@@ -1821,7 +1937,6 @@ while (window.isOpen()) {
         }
     }
 
-    // Placement-mode ghost.
     if (placingBarracks == 1) {
         float sw = (float)WIN_W * camZoom;
         float sh = (float)WIN_H * camZoom;
@@ -1831,7 +1946,6 @@ while (window.isOpen()) {
         Draw::rect(window, barracksGhost);
     }
 
-    // Enemies — fog-gated.
     for (int e = 0; e < ENEMY_COUNT; e++) {
         if (enemies[e].hp > 0) {
             int cx = (int)(enemies[e].x / FOG_CELL);
@@ -1882,9 +1996,7 @@ while (window.isOpen()) {
 
     Draw::vertexArray(window, fogVA);
 
-    // ============================================================
-    // render — HUD pass
-    // ============================================================
+    // HUD pass
     Camera::resetView(window);
 
     if (selecting == 1) {
@@ -1910,15 +2022,11 @@ while (window.isOpen()) {
     Draw::text(window, txtFps);
     Draw::text(window, txtHint);
 
-    // Build menu — content depends on which building is selected and
-    // whether the Barracks has been placed yet.
     if (hallSelected == 1 || (barracksSelected == 1 && barracksBuilt == BB_DONE)) {
         bmPanel.setPosition(bmX, bmY);
         Draw::rect(window, bmPanel);
 
         if (hallSelected == 1) {
-            // Worker button: centered if Barracks already exists,
-            // otherwise left-aligned to make room for "Build Barracks".
             float wbX = btnLeftX;
             if (barracksBuilt != BB_NONE) { wbX = btnCenterX; }
             btnWorkerBg.setPosition(wbX, btnRowY);
@@ -1937,7 +2045,6 @@ while (window.isOpen()) {
                 Draw::text(window, btnBarracksCost);
             }
         } else {
-            // Barracks menu — Soldier button centered.
             btnSoldierBg.setPosition(btnCenterX, btnRowY);
             Draw::rect(window, btnSoldierBg);
             btnSoldierLabel.setPosition(btnCenterX + 38.0, btnRowY + 6.0);
@@ -1946,7 +2053,6 @@ while (window.isOpen()) {
             Draw::text(window, btnSoldierCost);
         }
 
-        // Active queue for whichever building is open.
         int[]  activeQ;
         int    activeQCount;
         float  activeProg;
@@ -1992,7 +2098,7 @@ while (window.isOpen()) {
         }
     }
 
-    // Minimap.
+    // minimap
     Draw::rect(window, mmBg);
     mmHallDot.setPosition(mmX + HALL_X * mmScale, mmY + HALL_Y * mmScale);
     Draw::rect(window, mmHallDot);
@@ -2058,10 +2164,9 @@ while (window.isOpen()) {
     mmViewport.setPosition(vx, vy);
     Draw::rect(window, mmViewport);
 
-    // Banner — placement prompt (persistent) or save/load toast (timed).
     int showBanner = 0;
-    if (bannerTimer > 0.0)        { showBanner = 1; }
-    if (bannerTimer < 0.0)        { showBanner = 1; }
+    if (bannerTimer > 0.0) { showBanner = 1; }
+    if (bannerTimer < 0.0) { showBanner = 1; }
     if (placingBarracks == 0 && bannerTimer == 0.0) {
         bannerMsg = "";
     }
@@ -2074,9 +2179,8 @@ while (window.isOpen()) {
     window.display();
 }
 
-// ---- cleanup ----
+// cleanup
 bannerTxt.destroy();
-
 qLetterS.destroy();
 qLetterW.destroy();
 slotProgress.destroy();
@@ -2084,7 +2188,6 @@ slotSoldier.destroy();
 slotWorker.destroy();
 slotEmpty.destroy();
 txtQueueLabel.destroy();
-
 btnBarracksCost.destroy();
 btnBarracksLabel.destroy();
 btnSoldierCost.destroy();
@@ -2095,7 +2198,6 @@ btnBuildBarracksBg.destroy();
 btnSoldierBg.destroy();
 btnWorkerBg.destroy();
 bmPanel.destroy();
-
 mmViewport.destroy();
 mmEnemyDot.destroy();
 mmSoldierDot.destroy();
@@ -2105,7 +2207,6 @@ mmNodeCrystal.destroy();
 mmBarracksDot.destroy();
 mmHallDot.destroy();
 mmBg.destroy();
-
 txtHint.destroy();
 txtFps.destroy();
 txtSelected.destroy();
@@ -2117,9 +2218,7 @@ hudWoodIcon.destroy();
 hudCrystalIcon.destroy();
 hudPanel.destroy();
 hudFont.destroy();
-
 fogVA.destroy();
-
 selBox.destroy();
 constructBarFg.destroy();
 constructBarBg.destroy();
