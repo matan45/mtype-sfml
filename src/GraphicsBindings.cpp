@@ -1639,15 +1639,19 @@ namespace mtypesfml
             return g_host->makeVoid(ctx);
         }
         /* Read an mType float[] into a flat std::vector<float>. Used by mat/
-         * array uniform setters. Returns empty vector on type mismatch. */
-        inline std::vector<float> readFloatArray(const MTypeValue* arr)
+         * array uniform setters. Returns empty vector on type mismatch.
+         *
+         * NOTE: arrayGet REQUIRES a non-null MTypeContext* — passing nullptr
+         * crashes with an access violation inside the host on the first
+         * element. Always thread ctx through from the native entry point. */
+        inline std::vector<float> readFloatArray(MTypeContext* ctx, const MTypeValue* arr)
         {
             std::vector<float> out;
             if (g_host->getTag(arr) != MT_TAG_ARRAY) return out;
             std::size_t n = g_host->arrayLen(arr);
             out.reserve(n);
             for (std::size_t i = 0; i < n; ++i) {
-                const MTypeValue* v = g_host->arrayGet(nullptr, arr, i);
+                const MTypeValue* v = g_host->arrayGet(ctx, arr, i);
                 out.push_back(static_cast<float>(g_host->getFloat(v)));
             }
             return out;
@@ -1660,7 +1664,7 @@ namespace mtypesfml
             }
             sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
             if (!sh) return g_host->makeVoid(ctx);
-            auto vals = readFloatArray(args[2]);
+            auto vals = readFloatArray(ctx, args[2]);
             if (vals.size() != 9) {
                 g_host->raiseError(ctx, kEx,
                     "__native__sfml_shader_set_uniform_mat3: array must have length 9");
@@ -1677,7 +1681,7 @@ namespace mtypesfml
             }
             sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
             if (!sh) return g_host->makeVoid(ctx);
-            auto vals = readFloatArray(args[2]);
+            auto vals = readFloatArray(ctx, args[2]);
             if (vals.size() != 16) {
                 g_host->raiseError(ctx, kEx,
                     "__native__sfml_shader_set_uniform_mat4: array must have length 16");
@@ -1694,7 +1698,7 @@ namespace mtypesfml
             }
             sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
             if (!sh) return g_host->makeVoid(ctx);
-            auto vals = readFloatArray(args[2]);
+            auto vals = readFloatArray(ctx, args[2]);
             sh->setUniformArray(getStr(args[1]), vals.data(), vals.size());
             return g_host->makeVoid(ctx);
         }
@@ -1706,7 +1710,7 @@ namespace mtypesfml
             }
             sf::Shader* sh = g_shaders.find(g_host->getInt(args[0]));
             if (!sh) return g_host->makeVoid(ctx);
-            auto vals = readFloatArray(args[2]);
+            auto vals = readFloatArray(ctx, args[2]);
             if (vals.size() % 4 != 0) {
                 g_host->raiseError(ctx, kEx,
                     "__native__sfml_shader_set_uniform_vec4_array: array length must be multiple of 4");
