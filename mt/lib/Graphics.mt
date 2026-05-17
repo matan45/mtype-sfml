@@ -377,6 +377,13 @@ class Camera {
     public static function resetView(RenderWindow w): void {
         __native__sfml_window_reset_view(w.handle);
     }
+	
+	// Resync SFML's internal cache of GL state. Call once after any draw
+    // through a custom Shader so subsequent default draws (ImGui, plain
+    // shapes) don't inherit stale shader / texture / blend bindings.
+    public static function resetGLStates(RenderWindow w): void {
+      __native__sfml_window_reset_gl_states(w.handle);
+    }
 }
 
 // ----------------------------------------------------------------------

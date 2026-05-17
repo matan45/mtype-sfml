@@ -714,6 +714,20 @@ namespace mtypesfml
             if (w && v) w->setView(*v);
             return g_host->makeVoid(ctx);
         }
+        /* Resync SFML's internal GL state cache after we (or a user-bound
+         * shader) may have left it in an unknown state. Call this once
+         * after drawing through a custom shader so subsequent default
+         * draws (ImGui, drag-box, etc.) don't pick up stale state. */
+        MTypeValue* nWindowResetGLStates(void*, MTypeContext* ctx,
+                                           const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__sfml_window_reset_gl_states")) {
+                return g_host->makeVoid(ctx);
+            }
+            sf::RenderWindow* w = g_windows.find(g_host->getInt(args[0]));
+            if (w) w->resetGLStates();
+            return g_host->makeVoid(ctx);
+        }
         MTypeValue* nWindowResetView(void*, MTypeContext* ctx,
                                        const MTypeValue* const* args, int argc)
         {
@@ -1800,6 +1814,7 @@ namespace mtypesfml
         reg("__native__sfml_view_rotate",        &nViewRotate);
         reg("__native__sfml_window_set_view",    &nWindowSetView);
         reg("__native__sfml_window_reset_view",  &nWindowResetView);
+        reg("__native__sfml_window_reset_gl_states", &nWindowResetGLStates);
 
         /* RenderTexture */
         reg("__native__sfml_render_texture_create",                &nRenderTextureCreate);
