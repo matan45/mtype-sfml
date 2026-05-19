@@ -118,6 +118,43 @@ namespace mtypesfml
             return g_host->makeBool(ctx, ImGui::Begin(name) ? 1 : 0);
         }
 
+        MTypeValue* nImGuiSetNextWindowPos(void*, MTypeContext* ctx,
+                                             const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__imgui_set_next_window_pos")) {
+                return g_host->makeVoid(ctx);
+            }
+            ImGui::SetNextWindowPos(
+                ImVec2(static_cast<float>(g_host->getFloat(args[0])),
+                       static_cast<float>(g_host->getFloat(args[1]))),
+                ImGuiCond_Always);
+            return g_host->makeVoid(ctx);
+        }
+
+        MTypeValue* nImGuiSetNextWindowSize(void*, MTypeContext* ctx,
+                                              const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 2, "__native__imgui_set_next_window_size")) {
+                return g_host->makeVoid(ctx);
+            }
+            ImGui::SetNextWindowSize(
+                ImVec2(static_cast<float>(g_host->getFloat(args[0])),
+                       static_cast<float>(g_host->getFloat(args[1]))),
+                ImGuiCond_Always);
+            return g_host->makeVoid(ctx);
+        }
+
+        MTypeValue* nImGuiBeginFixed(void*, MTypeContext* ctx,
+                                      const MTypeValue* const* args, int argc)
+        {
+            if (!requireArgs(ctx, argc, 1, "__native__imgui_begin_fixed")) return g_host->makeBool(ctx, 0);
+            const char* name = getStr(args[0]);
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+                                   | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse
+                                   | ImGuiWindowFlags_NoSavedSettings;
+            return g_host->makeBool(ctx, ImGui::Begin(name, nullptr, flags) ? 1 : 0);
+        }
+
         /* Closable window: ImGui::Begin(label, &p_open) — adds the X close
          * button to the title bar. The C ABI can't pass a bool reference,
          * so we fold the in/out into a 2-element bool array:
@@ -1381,6 +1418,9 @@ namespace mtypesfml
         reg("__native__imgui_render",                  &nImGuiRender);
         reg("__native__imgui_begin",                   &nImGuiBegin);
         reg("__native__imgui_begin_closable",          &nImGuiBeginClosable);
+        reg("__native__imgui_set_next_window_pos",     &nImGuiSetNextWindowPos);
+        reg("__native__imgui_set_next_window_size",    &nImGuiSetNextWindowSize);
+        reg("__native__imgui_begin_fixed",             &nImGuiBeginFixed);
         reg("__native__imgui_end",                     &nImGuiEnd);
         reg("__native__imgui_text",                    &nImGuiText);
         reg("__native__imgui_button",                  &nImGuiButton);

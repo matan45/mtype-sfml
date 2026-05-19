@@ -50,6 +50,20 @@ class ImGui {
         return __native__imgui_begin(title);
     }
 
+    public static function setNextWindowPos(float x, float y): void {
+        __native__imgui_set_next_window_pos(x, y);
+    }
+
+    public static function setNextWindowSize(float width, float height): void {
+        __native__imgui_set_next_window_size(width, height);
+    }
+
+    // Fixed overlay window: no title bar, no resizing/moving/collapsing,
+    // and no persisted imgui.ini placement.
+    public static function beginFixed(string title): bool {
+        return __native__imgui_begin_fixed(title);
+    }
+
     public static function end(): void {
         __native__imgui_end();
     }
